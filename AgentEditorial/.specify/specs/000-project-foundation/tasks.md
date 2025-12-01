@@ -97,49 +97,49 @@
 
 ### Tests for User Story 1
 
-- T043 [P] [US1] Create unit test for robots.txt parser in tests/unit/test_robots_txt.py
-- T044 [P] [US1] Create unit test for text cleaner in tests/unit/test_text_cleaner.py
-- T045 [P] [US1] Create integration test for crawl workflow in tests/integration/test_crawl_workflow.py
-- T046 [P] [US1] Create E2E test for editorial analysis API in tests/e2e/test_api_sites.py (scenario: full workflow)
+- [x] T043 [P] [US1] Create unit test for robots.txt parser in tests/unit/test_robots_txt.py
+- [x] T044 [P] [US1] Create unit test for text cleaner in tests/unit/test_text_cleaner.py
+- [x] T045 [P] [US1] Create integration test for crawl workflow in tests/integration/test_crawl_workflow.py
+- [x] T046 [P] [US1] Create E2E test for editorial analysis API in tests/e2e/test_api_sites.py (scenario: full workflow)
 
 ### Implementation for User Story 1
 
 #### Ingestion & Crawling
 
-- T047 [P] [US1] Implement Crawl4AI async wrapper in python_scripts/ingestion/crawl_pages.py
-- T048 [US1] Implement sitemap detection in python_scripts/ingestion/detect_sitemaps.py
-- T049 [US1] Implement crawl_with_permissions function respecting robots.txt and crawl-delay in python_scripts/ingestion/crawl_pages.py
-- T050 [US1] Implement cache checking logic (30 days TTL) in python_scripts/ingestion/crawl_pages.py
+- [x] T047 [P] [US1] Implement Crawl4AI async wrapper in python_scripts/ingestion/crawl_pages.py
+- [x] T048 [US1] Implement sitemap detection in python_scripts/ingestion/detect_sitemaps.py
+- [x] T049 [US1] Implement crawl_with_permissions function respecting robots.txt and crawl-delay in python_scripts/ingestion/crawl_pages.py
+- [x] T050 [US1] Implement cache checking logic (30 days TTL) in python_scripts/ingestion/crawl_pages.py
 
 #### Agent Analysis
 
-- T051 [US1] Implement agent_analysis.py with multi-LLM orchestration (llama3:8b, mistral:7b, phi3:medium)
-- T052 [US1] Add editorial style analysis prompts in python_scripts/agents/prompts.py (language level, tone, structure, keywords, audience)
-- T053 [US1] Implement LLM synthesis function merging 4 LLM analyses in python_scripts/agents/agent_analysis.py
+- [x] T051 [US1] Implement agent_analysis.py with multi-LLM orchestration (llama3:8b, mistral:7b, phi3:medium)
+- [x] T052 [US1] Add editorial style analysis prompts in python_scripts/agents/prompts.py (language level, tone, structure, keywords, audience)
+- [x] T053 [US1] Implement LLM synthesis function merging 4 LLM analyses in python_scripts/agents/agent_analysis.py
 
 #### Database CRUD
 
-- T054 [P] [US1] Implement CRUD operations for SiteProfile in python_scripts/database/crud_profiles.py
-- T055 [P] [US1] Implement CRUD operations for WorkflowExecution in python_scripts/database/crud_executions.py
-- T056 [P] [US1] Implement CRUD operations for SiteAnalysisResult in python_scripts/database/crud_executions.py
+- [x] T054 [P] [US1] Implement CRUD operations for SiteProfile in python_scripts/database/crud_profiles.py
+- [x] T055 [P] [US1] Implement CRUD operations for WorkflowExecution in python_scripts/database/crud_executions.py
+- [x] T056 [P] [US1] Implement CRUD operations for SiteAnalysisResult in python_scripts/database/crud_executions.py
 
 #### Workflow Orchestration
 
-- T057 [US1] Implement editorial analysis workflow function in python_scripts/agents/agent_orchestrator.py
-- T058 [US1] Implement background task runner for editorial analysis in python_scripts/api/routers/sites.py
-- T059 [US1] Add workflow state transitions (pending → running → completed/failed) in python_scripts/agents/agent_orchestrator.py
+- [x] T057 [US1] Implement editorial analysis workflow function in python_scripts/agents/agent_orchestrator.py
+- [x] T058 [US1] Implement background task runner for editorial analysis in python_scripts/api/routers/sites.py
+- [x] T059 [US1] Add workflow state transitions (pending → running → completed/failed) in python_scripts/agents/agent_orchestrator.py
 
 #### API Endpoints
 
-- T060 [US1] Implement POST /api/v1/sites/analyze endpoint in python_scripts/api/routers/sites.py
-- T061 [US1] Implement GET /api/v1/sites/{domain} endpoint in python_scripts/api/routers/sites.py
-- T062 [US1] Add request/response schemas for site analysis in python_scripts/api/schemas/requests.py and responses.py
-- T063 [US1] Register sites router in python_scripts/api/main.py
+- [x] T060 [US1] Implement POST /api/v1/sites/analyze endpoint in python_scripts/api/routers/sites.py
+- [x] T061 [US1] Implement GET /api/v1/sites/{domain} endpoint in python_scripts/api/routers/sites.py
+- [x] T062 [US1] Add request/response schemas for site analysis in python_scripts/api/schemas/requests.py and responses.py
+- [x] T063 [US1] Register sites router in python_scripts/api/main.py
 
 #### Audit & Metrics
 
-- T064 [US1] Add audit logging for workflow steps in python_scripts/agents/agent_orchestrator.py (integrated in orchestrator)
-- T065 [US1] Record performance metrics (duration, tokens consumed, pages crawled) in python_scripts/agents/agent_orchestrator.py
+- [x] T064 [US1] Add audit logging for workflow steps in python_scripts/agents/agent_orchestrator.py (integrated in orchestrator)
+- [x] T065 [US1] Record performance metrics (duration, tokens consumed, pages crawled) in python_scripts/agents/agent_orchestrator.py
   - Duration tracked in `workflow_executions.duration_seconds`
   - Pages crawled tracked in `site_profiles.pages_analyzed`
   - Tokens consumed: NOT YET TRACKED (requires LLM response metadata extraction)
@@ -162,11 +162,11 @@
 
 ### Implementation for User Story 2
 
--  T068 [US2] Implement GET /api/v1/sites endpoint (list all analyzed sites) in python_scripts/api/routers/sites.py
--  T069 [US2] Implement GET /api/v1/sites/{domain}/history endpoint in python_scripts/api/routers/sites.py
--  T070 [US2] Add query logic to fetch historical analyses for a domain in python_scripts/database/crud_profiles.py
--  T071 [US2] Add response schema for site history in python_scripts/api/schemas/responses.py
--  T072 [US2] Implement metrics comparison logic (temporal evolution) in python_scripts/api/routers/sites.py
+- [x] T068 [US2] Implement GET /api/v1/sites endpoint (list all analyzed sites) in python_scripts/api/routers/sites.py
+- [x] T069 [US2] Implement GET /api/v1/sites/{domain}/history endpoint in python_scripts/api/routers/sites.py
+- [x] T070 [US2] Add query logic to fetch historical analyses for a domain in python_scripts/database/crud_profiles.py
+- [x] T071 [US2] Add response schema for site history in python_scripts/api/schemas/responses.py
+- [x] T072 [US2] Implement metrics comparison logic (temporal evolution) in python_scripts/api/routers/sites.py
 
 **Checkpoint**: User Story 2 complete - can view analysis history and track evolution
 
@@ -188,27 +188,27 @@
 
 #### Competitor Search Agent
 
--  T076 [US3] Implement agent_competitor.py with multi-source search (Tavily, DuckDuckGo, Crawl4AI)
--  T077 [US3] Add competitor search prompts (LLM filtering) in python_scripts/agents/prompts.py
--  T078 [US3] Implement LLM filtering logic (phi3:medium) to remove false positives in python_scripts/agents/agent_competitor.py
--  T079 [US3] Implement result deduplication and ranking by relevance score in python_scripts/agents/agent_competitor.py
+- [x] T076 [US3] Implement agent_competitor.py with multi-source search (Tavily, DuckDuckGo, Crawl4AI)
+- [x] T077 [US3] Add competitor search prompts (LLM filtering) in python_scripts/agents/prompts.py
+- [x] T078 [US3] Implement LLM filtering logic (phi3:medium) to remove false positives in python_scripts/agents/agent_competitor.py
+- [x] T079 [US3] Implement result deduplication and ranking by relevance score in python_scripts/agents/agent_competitor.py
 
 #### Database
 
--  T080 [US3] Create Competitor model (if needed for validation) or extend existing models
--  T081 [US3] Store competitor search results in workflow_executions.output_data (JSONB)
+- [x] T080 [US3] Create Competitor model (if needed for validation) or extend existing models
+- [x] T081 [US3] Store competitor search results in workflow_executions.output_data (JSONB)
 
 #### API Endpoints
 
--  T082 [US3] Implement POST /api/v1/competitors/search endpoint in python_scripts/api/routers/competitors.py
--  T083 [US3] Implement GET /api/v1/competitors/{domain} endpoint in python_scripts/api/routers/competitors.py
--  T084 [US3] Add request/response schemas for competitor search in python_scripts/api/schemas/requests.py and responses.py
--  T085 [US3] Register competitors router in python_scripts/api/main.py
+- [x] T082 [US3] Implement POST /api/v1/competitors/search endpoint in python_scripts/api/routers/competitors.py
+- [x] T083 [US3] Implement GET /api/v1/competitors/{domain} endpoint in python_scripts/api/routers/competitors.py
+- [x] T084 [US3] Add request/response schemas for competitor search in python_scripts/api/schemas/requests.py and responses.py
+- [x] T085 [US3] Register competitors router in python_scripts/api/main.py
 
 #### Workflow Integration
 
--  T086 [US3] Integrate competitor search workflow in python_scripts/agents/agent_orchestrator.py
--  T087 [US3] Add competitor search background task runner in python_scripts/api/routers/competitors.py
+- [x] T086 [US3] Integrate competitor search workflow in python_scripts/agents/agent_orchestrator.py
+- [x] T087 [US3] Add competitor search background task runner in python_scripts/api/routers/competitors.py
 
 **Checkpoint**: User Story 3 complete - can automatically identify competitors
 

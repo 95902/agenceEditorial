@@ -78,30 +78,104 @@ Format your response as JSON:
 }}
 """
 
+EDITORIAL_SYNTHESIS_PROMPT = """Synthesize the following multiple LLM analyses into a unified editorial profile.
+
+Llama3 Analysis:
+{llama3_analysis}
+
+Mistral Analysis:
+{mistral_analysis}
+
+Phi3 Analysis:
+{phi3_analysis}
+
+Create a comprehensive editorial profile that combines all insights. Format as JSON:
+{{
+    "language_level": "...",
+    "editorial_tone": "...",
+    "target_audience": {{
+        "primary": "...",
+        "secondary": [...]
+    }},
+    "activity_domains": {{
+        "primary_domains": [...],
+        "secondary_domains": [...]
+    }},
+    "content_structure": {{
+        "average_word_count": ...,
+        "average_paragraph_count": ...,
+        "heading_patterns": [...],
+        "media_usage": {{"images": ..., "videos": ...}},
+        "internal_linking": ...
+    }},
+    "keywords": {{
+        "primary_keywords": [...],
+        "keyword_density": {{"keyword": density_percentage}},
+        "semantic_keywords": [...]
+    }},
+    "style_features": {{
+        "sentence_length_avg": ...,
+        "reading_level": "...",
+        "formality_score": ...
+    }}
+}}
+"""
+
 # Competitor Search Prompts
 
-COMPETITOR_FILTERING_PROMPT = """Evaluate if the following domain is a relevant competitor for the target domain.
+COMPETITOR_FILTERING_PROMPT = """You are evaluating candidate domains to identify competitors for the target domain.
 
-Target domain: {target_domain}
-Target description: {target_description}
-Target services: {target_services}
-Target keywords: {target_keywords}
+Target domain: {domain}
 
-Candidate domain: {candidate_domain}
-Candidate description: {candidate_description}
-Candidate services: {candidate_services}
+Context about the target domain:
+{context}
 
-Rate the relevance from 0.0 to 1.0 where:
-- 0.8-1.0: Direct competitor (same products/services, same market)
-- 0.6-0.79: Indirect competitor (same industry, complementary services)
-- 0.0-0.59: Not a competitor
+Candidate domains to evaluate:
+{candidates}
 
-Provide your response as JSON:
+IMPORTANT EXCLUSIONS - DO NOT INCLUDE:
+- Government services (.gouv.fr, .ameli.fr, .caf.fr, .francetravail.fr, .parcoursup.fr, .labanquepostale.fr)
+- E-commerce sites (online shopping, retail stores)
+- Public services and administration websites
+- News/media websites
+- Academic/educational institutions (.edu.fr, .ac.fr)
+
+ONLY VALID COMPETITORS:
+- ESN (Entreprise de Services du Numérique)
+- SSII (Société de Services en Ingénierie Informatique)
+- Digital agencies (agences digitales)
+- IT services companies (sociétés de services informatiques)
+- Software development companies
+- IT consulting firms
+
+For each candidate domain, determine if it is a relevant competitor. Rate each one with:
+- relevance_score: 0.0 to 1.0 
+  * 0.8-1.0 = direct competitor (same sector: ESN/SSII/IT services, similar services, same target market)
+  * 0.6-0.79 = indirect competitor (only if same sector ESN/SSII/IT services but different focus)
+  * 0.0-0.59 = not a competitor (different industry, government service, e-commerce, etc.)
+- confidence_score: 0.0 to 1.0 (how confident you are in your assessment)
+- reason: Brief explanation of why it is or isn't a competitor
+
+Return your response as JSON in this format:
 {{
-    "relevance_score": ...,
-    "reason": "...",
-    "category": "direct" | "indirect" | "not_competitor"
+    "competitors": [
+        {{
+            "domain": "example.com",
+            "relevance_score": 0.85,
+            "confidence_score": 0.9,
+            "reason": "ESN/SSII with similar IT services and target market"
+        }},
+        {{
+            "domain": "other.com",
+            "relevance_score": 0.3,
+            "confidence_score": 0.8,
+            "reason": "Government service / e-commerce / different industry, not a competitor"
+        }}
+    ]
 }}
+
+Only include domains that are actual competitors (relevance_score >= 0.6) AND in the ESN/SSII/IT services sector. 
+Exclude all government services, e-commerce, and non-IT companies.
 """
 
 # Topic Modeling Prompts (for post-processing)
