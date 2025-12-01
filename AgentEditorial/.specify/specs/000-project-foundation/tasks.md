@@ -19,14 +19,14 @@
 
 **Purpose**: Project initialization and basic structure
 
-- T001 Create project structure per plan.md in python_scripts/
-- T002 Initialize Python project with uv and create pyproject.toml
-- T003 [P] Configure linting tools (ruff, black, isort) in pyproject.toml
-- T004 [P] Configure type checking (mypy) with strict mode in pyproject.toml
-- T005 [P] Create .env.example template with all required environment variables
-- T006 [P] Setup Docker Compose configuration in docker/docker-compose.yml (PostgreSQL, Qdrant, Ollama)
-- T007 [P] Create .gitignore with Python, IDE, and environment-specific patterns
-- T008 Create README.md with project overview and quickstart reference
+- [x] T001 Create project structure per plan.md in python_scripts/
+- [x] T002 Initialize Python project with uv and create pyproject.toml
+- [x] T003 [P] Configure linting tools (ruff, black, isort) in pyproject.toml
+- [x] T004 [P] Configure type checking (mypy) with strict mode in pyproject.toml
+- [x] T005 [P] Create .env.example template with all required environment variables
+- [x] T006 [P] Setup Docker Compose configuration in docker/docker-compose.yml (PostgreSQL, Qdrant, Ollama)
+- [x] T007 [P] Create .gitignore with Python, IDE, and environment-specific patterns
+- [x] T008 Create README.md with project overview and quickstart reference
 
 ---
 
@@ -38,52 +38,52 @@
 
 ### Database & Configuration
 
-- T009 Setup database connection configuration in python_scripts/config/settings.py (Pydantic Settings)
-- T010 [P] Create async database session factory in python_scripts/database/db_session.py
-- T011 [P] Initialize Alembic for migrations in python_scripts/database/migrations/
-- T012 Create database models base class in python_scripts/database/models.py
-- T013 [P] Create SiteProfile model in python_scripts/database/models.py (table: site_profiles)
-- T014 [P] Create WorkflowExecution model in python_scripts/database/models.py (table: workflow_executions)
-- T015 [P] Create SiteAnalysisResult model in python_scripts/database/models.py (table: site_analysis_results)
-- T016 [P] Create CompetitorArticle model in python_scripts/database/models.py (table: competitor_articles)
-- T017 [P] Create EditorialTrend model in python_scripts/database/models.py (table: editorial_trends)
-- T018 [P] Create BertopicAnalysis model in python_scripts/database/models.py (table: bertopic_analysis)
-- T019 [P] Create CrawlCache model in python_scripts/database/models.py (table: crawl_cache)
-- T020 [P] Create ScrapingPermission model in python_scripts/database/models.py (table: scraping_permissions)
-- T021 [P] Create PerformanceMetric model in python_scripts/database/models.py (table: performance_metrics)
-- T022 [P] Create AuditLog model in python_scripts/database/models.py (table: audit_log)
-- T023 Generate initial Alembic migration with all 10 tables (requires DB to be running: `alembic revision --autogenerate -m "Initial schema"`)
-- T024 Create CRUD base utilities in python_scripts/database/ (shared patterns) - Deferred to user story implementation
+- [x] T009 Setup database connection configuration in python_scripts/config/settings.py (Pydantic Settings)
+- [x] T010 [P] Create async database session factory in python_scripts/database/db_session.py
+- [x] T011 [P] Initialize Alembic for migrations in python_scripts/database/migrations/
+- [x] T012 Create database models base class in python_scripts/database/models.py
+- [x] T013 [P] Create SiteProfile model in python_scripts/database/models.py (table: site_profiles)
+- [x] T014 [P] Create WorkflowExecution model in python_scripts/database/models.py (table: workflow_executions)
+- [x] T015 [P] Create SiteAnalysisResult model in python_scripts/database/models.py (table: site_analysis_results)
+- [x] T016 [P] Create CompetitorArticle model in python_scripts/database/models.py (table: competitor_articles)
+- [x] T017 [P] Create EditorialTrend model in python_scripts/database/models.py (table: editorial_trends)
+- [x] T018 [P] Create BertopicAnalysis model in python_scripts/database/models.py (table: bertopic_analysis)
+- [x] T019 [P] Create CrawlCache model in python_scripts/database/models.py (table: crawl_cache)
+- [x] T020 [P] Create ScrapingPermission model in python_scripts/database/models.py (table: scraping_permissions)
+- [x] T021 [P] Create PerformanceMetric model in python_scripts/database/models.py (table: performance_metrics)
+- [x] T022 [P] Create AuditLog model in python_scripts/database/models.py (table: audit_log)
+- [x] T023 Generate initial Alembic migration with all 10 tables (requires DB to be running: `alembic revision --autogenerate -m "Initial schema"`)
+- [ ] T024 Create CRUD base utilities in python_scripts/database/ (shared patterns) - Deferred to user story implementation
 
 ### Utilities & Infrastructure
 
-- T025 [P] Create custom exceptions hierarchy in python_scripts/utils/exceptions.py
-- T026 [P] Setup structured logging (structlog) in python_scripts/utils/logging.py
-- T027 [P] Create Qdrant client wrapper in python_scripts/vectorstore/qdrant_client.py
-- T028 [P] Create embeddings utility (Sentence-Transformers) in python_scripts/vectorstore/embeddings_utils.py
-- T029 Initialize Qdrant collection "competitor_articles" (384 dimensions, cosine distance) - Script created in scripts/init_qdrant.py
+- [x] T025 [P] Create custom exceptions hierarchy in python_scripts/utils/exceptions.py
+- [x] T026 [P] Setup structured logging (structlog) in python_scripts/utils/logging.py
+- [x] T027 [P] Create Qdrant client wrapper in python_scripts/vectorstore/qdrant_client.py
+- [x] T028 [P] Create embeddings utility (Sentence-Transformers) in python_scripts/vectorstore/embeddings_utils.py
+- [x] T029 Initialize Qdrant collection "competitor_articles" (384 dimensions, cosine distance) - Script created in scripts/init_qdrant.py
 
 ### FastAPI Base Setup
 
-- T030 Create FastAPI app structure in python_scripts/api/main.py
-- T031 [P] Create API dependencies (DB session, rate limiting) in python_scripts/api/dependencies.py
-- T032 [P] Create rate limiting middleware in python_scripts/api/middleware/rate_limit.py (slowapi, IP-based)
-- T033 [P] Create Pydantic request schemas in python_scripts/api/schemas/requests.py
-- T034 [P] Create Pydantic response schemas in python_scripts/api/schemas/responses.py
-- T035 Create health check endpoint in python_scripts/api/routers/health.py
-- T036 Register health router in python_scripts/api/main.py
-- T037 Configure OpenAPI documentation (title, version, description from contracts/api.yaml)
+- [x] T030 Create FastAPI app structure in python_scripts/api/main.py
+- [x] T031 [P] Create API dependencies (DB session, rate limiting) in python_scripts/api/dependencies.py
+- [x] T032 [P] Create rate limiting middleware in python_scripts/api/middleware/rate_limit.py (slowapi, IP-based)
+- [x] T033 [P] Create Pydantic request schemas in python_scripts/api/schemas/requests.py
+- [x] T034 [P] Create Pydantic response schemas in python_scripts/api/schemas/responses.py
+- [x] T035 Create health check endpoint in python_scripts/api/routers/health.py
+- [x] T036 Register health router in python_scripts/api/main.py
+- [x] T037 Configure OpenAPI documentation (title, version, description from contracts/api.yaml)
 
 ### Agents Base Infrastructure
 
-- T038 [P] Create BaseAgent abstract class in python_scripts/agents/base_agent.py
-- T039 [P] Create LLM factory (Ollama) in python_scripts/agents/utils/llm_factory.py
-- T040 [P] Create prompts centralization module in python_scripts/agents/prompts.py (structure only)
+- [x] T038 [P] Create BaseAgent abstract class in python_scripts/agents/base_agent.py
+- [x] T039 [P] Create LLM factory (Ollama) in python_scripts/agents/utils/llm_factory.py
+- [x] T040 [P] Create prompts centralization module in python_scripts/agents/prompts.py (structure only)
 
 ### Ingestion Base
 
-- T041 [P] Create robots.txt parser in python_scripts/ingestion/robots_txt.py
-- T042 [P] Create text cleaner utility in python_scripts/ingestion/text_cleaner.py
+- [x] T041 [P] Create robots.txt parser in python_scripts/ingestion/robots_txt.py
+- [x] T042 [P] Create text cleaner utility in python_scripts/ingestion/text_cleaner.py
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
