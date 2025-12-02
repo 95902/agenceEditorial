@@ -1,11 +1,15 @@
 """Robots.txt parser and caching."""
 
 import re
+import warnings
 from datetime import datetime, timedelta
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+# Suppress SSL warnings for development
+warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 
 from python_scripts.config.settings import settings
 from python_scripts.utils.exceptions import CrawlingError
@@ -111,7 +115,11 @@ async def fetch_robots_txt(domain: str) -> Optional[str]:
     """Fetch robots.txt for a domain."""
     try:
         url = f"https://{domain}/robots.txt"
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Disable SSL verification for development (can be configured via settings)
+        async with httpx.AsyncClient(
+            timeout=10.0,
+            verify=False,  # Disable SSL verification for development
+        ) as client:
             response = await client.get(url, follow_redirects=True)
             if response.status_code == 200:
                 return response.text

@@ -23,6 +23,7 @@ Pour un guide complet d'installation et de configuration, consultez [quickstart.
 - uv (gestionnaire de dépendances)
 - Playwright (pour Crawl4AI)
 - Ollama (pour les LLMs locaux)
+- **GPU NVIDIA (optionnel mais recommandé)** : Pour accélérer les LLMs, consultez [docs/gpu-setup.md](docs/gpu-setup.md)
 
 ### Installation rapide
 
@@ -62,6 +63,92 @@ uvicorn python_scripts.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 L'API sera disponible sur `http://localhost:8000` avec la documentation Swagger sur `http://localhost:8000/docs`.
+
+### Accès aux services
+
+- **API FastAPI**: http://localhost:8000
+- **Documentation Swagger**: http://localhost:8000/docs
+- **pgAdmin** (gestion PostgreSQL): http://localhost:5050
+  - Email: `admin@editorial.dev` (par défaut)
+  - Password: `admin` (par défaut)
+  - **Guide de configuration** : Voir [docs/pgadmin-setup.md](docs/pgadmin-setup.md)
+  - **Connexion PostgreSQL** :
+    - Host: `postgres` ⚠️ (nom du service Docker, **PAS** localhost)
+    - Port: `5432`
+    - Database: `editorial_db`
+    - Username: `editorial_user`
+    - Password: (valeur de `POSTGRES_PASSWORD` dans `.env`)
+- **Qdrant Dashboard**: http://localhost:6333/dashboard
+- **Ollama API**: http://localhost:11435
+
+### Configuration GPU (optionnel mais recommandé)
+
+Pour accélérer les LLMs avec votre GPU NVIDIA, consultez le guide complet : [docs/gpu-setup.md](docs/gpu-setup.md)
+
+**Configuration rapide** :
+1. Assurez-vous que `nvidia-container-toolkit` est installé
+2. Ajoutez `OLLAMA_NUM_GPU=1` dans votre fichier `.env`
+3. Redémarrez Ollama : `make docker-restart` ou `docker compose -f docker/docker-compose.yml restart ollama`
+
+Le GPU sera automatiquement détecté et utilisé par Ollama.
+
+## ⚡ Commandes rapides
+
+### Avec Makefile (recommandé)
+
+```bash
+# Afficher toutes les commandes disponibles
+make help
+
+# Démarrage complet (Docker + DB + API)
+make dev
+
+# Ou étape par étape:
+make docker-up      # Démarrer les services Docker
+make init-db        # Initialiser la base de données
+make start          # Démarrer l'API
+
+# Redémarrer l'application
+make restart
+
+# Arrêter l'API
+make stop
+
+# Voir le statut
+make status
+
+# Voir les logs Docker
+make docker-logs
+```
+
+### Avec les scripts shell
+
+```bash
+# Démarrer l'application
+./scripts/start.sh
+
+# Redémarrer l'application
+./scripts/restart.sh
+
+# Arrêter l'application
+./scripts/stop.sh
+```
+
+### Commandes Docker directement
+
+```bash
+# Démarrer les services
+docker-compose -f docker/docker-compose.yml up -d
+
+# Arrêter les services
+docker-compose -f docker/docker-compose.yml down
+
+# Redémarrer les services
+docker-compose -f docker/docker-compose.yml restart
+
+# Voir les logs
+docker-compose -f docker/docker-compose.yml logs -f
+```
 
 ## 📁 Structure du projet
 

@@ -17,7 +17,7 @@ class CompetitorSearchRequest(BaseModel):
     """Request schema for competitor search."""
 
     domain: str = Field(..., description="Domain to find competitors for")
-    max_competitors: int = Field(10, ge=3, le=20, description="Maximum competitors to return")
+    max_competitors: int = Field(10, ge=3, le=100, description="Maximum competitors to return (3-100)")
 
 
 class CompetitorValidationRequest(BaseModel):

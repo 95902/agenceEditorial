@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-editorial_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-editorial_user} -d ${POSTGRES_DB:-editorial_db}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -41,8 +41,14 @@ services:
       - "11435:11434"  # Changed to 11435 to avoid conflict with existing Ollama
     volumes:
       - ollama_data:/root/.ollama
+    # Configuration GPU pour Docker Compose standalone (non-Swarm)
+    runtime: nvidia
     environment:
       - OLLAMA_HOST=0.0.0.0
+      # Force GPU usage (set to "cpu" to disable GPU)
+      - OLLAMA_NUM_GPU=${OLLAMA_NUM_GPU:-1}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -51,10 +57,29 @@ services:
     networks:
       - editorial_network
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: editorial_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@editorial.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_CHECK_EMAIL_DELIVERABILITY: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - editorial_network
+
 volumes:
   postgres_data:
   qdrant_data:
   ollama_data:
+  pgadmin_data:
 
 networks:
   editorial_network:

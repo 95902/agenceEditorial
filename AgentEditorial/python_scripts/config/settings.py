@@ -1,17 +1,31 @@
 """Configuration settings using Pydantic Settings."""
 
+import os
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+# Find .env file - look in project root (AgentEditorial/)
+# Go up from python_scripts/config/settings.py -> python_scripts/config -> python_scripts -> AgentEditorial
+_project_root = Path(__file__).parent.parent.parent
+_env_file = _project_root / ".env"
+
+# Also check current working directory as fallback
+_cwd_env_file = Path.cwd() / ".env"
+if not _env_file.exists() and _cwd_env_file.exists():
+    _env_file = _cwd_env_file
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_env_file) if _env_file.exists() else None,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # Also load from environment variables directly
+        env_prefix="",
     )
 
     # PostgreSQL

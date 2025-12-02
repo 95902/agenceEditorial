@@ -112,6 +112,41 @@ class GapsResponse(BaseModel):
     total: int
 
 
+class SiteHistoryEntry(BaseModel):
+    """Response schema for a single historical analysis entry."""
+
+    analysis_date: datetime
+    language_level: Optional[str] = None
+    editorial_tone: Optional[str] = None
+    pages_analyzed: int
+    target_audience: Optional[Dict[str, Any]] = None
+    activity_domains: Optional[Dict[str, Any]] = None
+    content_structure: Optional[Dict[str, Any]] = None
+    keywords: Optional[Dict[str, Any]] = None
+    style_features: Optional[Dict[str, Any]] = None
+
+
+class MetricComparison(BaseModel):
+    """Response schema for metric comparison between time periods."""
+
+    metric_name: str
+    current_value: Any
+    previous_value: Optional[Any] = None
+    change: Optional[float] = None  # Percentage change
+    trend: Optional[str] = None  # "increasing", "decreasing", "stable"
+
+
+class SiteHistoryResponse(BaseModel):
+    """Response schema for site analysis history."""
+
+    domain: str
+    total_analyses: int
+    history: List[SiteHistoryEntry]
+    metric_comparisons: Optional[List[MetricComparison]] = None
+    first_analysis_date: Optional[datetime] = None
+    last_analysis_date: Optional[datetime] = None
+
+
 class ErrorResponse(BaseModel):
     """Response schema for errors."""
 
