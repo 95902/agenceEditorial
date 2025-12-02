@@ -166,3 +166,4 @@ class TestExtractMetaDescription:
         result = extract_meta_description(html)
         assert result == "This is the description"
 
+

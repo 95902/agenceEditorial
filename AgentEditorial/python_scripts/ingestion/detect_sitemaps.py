@@ -153,3 +153,4 @@ async def get_sitemap_urls(domain: str) -> List[str]:
     logger.info("Sitemap URLs extracted", domain=domain, total_urls=len(unique_urls))
     return unique_urls
 
+
