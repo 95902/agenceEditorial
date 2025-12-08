@@ -87,7 +87,35 @@ async def parse_sitemap(sitemap_url: str) -> List[str]:
             if response.status_code != 200:
                 raise CrawlingError(f"Sitemap not accessible: {sitemap_url}")
 
+            # Check Content-Type to ensure it's XML, not HTML
+            content_type = response.headers.get("content-type", "").lower()
+            if "html" in content_type and "xml" not in content_type:
+                # If redirected to HTML page, log and skip
+                final_url = str(response.url)
+                logger.warning(
+                    "Sitemap redirected to HTML page",
+                    original_url=sitemap_url,
+                    final_url=final_url,
+                    content_type=content_type,
+                )
+                raise CrawlingError(f"Sitemap redirected to HTML page: {final_url}")
+
             xml_content = response.text
+            
+            # Additional check: verify it's actually XML (starts with <?xml or <urlset or <sitemapindex)
+            xml_content_stripped = xml_content.strip()
+            if not (xml_content_stripped.startswith("<?xml") or 
+                    xml_content_stripped.startswith("<urlset") or 
+                    xml_content_stripped.startswith("<sitemapindex")):
+                final_url = str(response.url)
+                logger.warning(
+                    "Sitemap content is not XML",
+                    original_url=sitemap_url,
+                    final_url=final_url,
+                    content_preview=xml_content[:200],
+                )
+                raise CrawlingError(f"Sitemap content is not valid XML: {final_url}")
+            
             root = ElementTree.fromstring(xml_content)
 
             urls = []

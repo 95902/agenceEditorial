@@ -1,12 +1,14 @@
 """Web page crawling utilities using Crawl4AI."""
 
 import asyncio
+import re
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.utils.logging import get_logger
@@ -270,3 +272,240 @@ async def extract_links(html: str, base_url: str) -> List[str]:
             continue
     
     return list(set(links))  # Remove duplicates
+
+
+def extract_article_from_html(
+    html: str,
+    url: str,
+) -> Dict[str, Any]:
+    """
+    Extract article data from HTML content (T097 - US5).
+    
+    Extracts:
+    - title: Article title
+    - author: Article author
+    - published_date: Publication date
+    - content: Article text content
+    - content_html: Article HTML content
+    - images: List of image URLs
+    - word_count: Word count of the content
+    
+    Args:
+        html: HTML content
+        url: Source URL
+        
+    Returns:
+        Dictionary with extracted article data
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    
+    article_data = {
+        "title": "",
+        "author": None,
+        "published_date": None,
+        "content": "",
+        "content_html": "",
+        "images": [],
+        "word_count": 0,
+    }
+    
+    # Extract title - try multiple strategies
+    title = None
+    
+    # Strategy 1: <title> tag
+    if not title:
+        title_tag = soup.find("title")
+        if title_tag:
+            title = title_tag.get_text(strip=True)
+    
+    # Strategy 2: <h1> tag
+    if not title:
+        h1_tag = soup.find("h1")
+        if h1_tag:
+            title = h1_tag.get_text(strip=True)
+    
+    # Strategy 3: Open Graph title
+    if not title:
+        og_title = soup.find("meta", property="og:title")
+        if og_title and og_title.get("content"):
+            title = og_title.get("content").strip()
+    
+    # Strategy 4: Article title attribute
+    if not title:
+        article_title = soup.find(attrs={"itemprop": "headline"})
+        if article_title:
+            title = article_title.get_text(strip=True)
+    
+    article_data["title"] = title or ""
+    
+    # Extract author - try multiple strategies
+    author = None
+    
+    # Strategy 1: <meta name="author">
+    meta_author = soup.find("meta", attrs={"name": "author"})
+    if meta_author and meta_author.get("content"):
+        author = meta_author.get("content").strip()
+    
+    # Strategy 2: <meta property="article:author">
+    if not author:
+        og_author = soup.find("meta", property="article:author")
+        if og_author and og_author.get("content"):
+            author = og_author.get("content").strip()
+    
+    # Strategy 3: itemprop="author"
+    if not author:
+        author_elem = soup.find(attrs={"itemprop": "author"})
+        if author_elem:
+            author = author_elem.get_text(strip=True)
+    
+    # Strategy 4: Common class names
+    if not author:
+        for class_name in ["author", "byline", "post-author"]:
+            author_elem = soup.find(class_=re.compile(class_name, re.I))
+            if author_elem:
+                author = author_elem.get_text(strip=True)
+                break
+    
+    article_data["author"] = author
+    
+    # Extract published date - try multiple strategies
+    published_date = None
+    
+    # Strategy 1: <meta property="article:published_time">
+    og_date = soup.find("meta", property="article:published_time")
+    if og_date and og_date.get("content"):
+        try:
+            published_date = datetime.fromisoformat(og_date.get("content").replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            pass
+    
+    # Strategy 2: <time datetime>
+    if not published_date:
+        time_tag = soup.find("time", attrs={"datetime": True})
+        if time_tag:
+            try:
+                published_date = datetime.fromisoformat(time_tag.get("datetime").replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+    
+    # Strategy 3: itemprop="datePublished"
+    if not published_date:
+        date_elem = soup.find(attrs={"itemprop": "datePublished"})
+        if date_elem:
+            date_str = date_elem.get("content") or date_elem.get_text(strip=True)
+            try:
+                published_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+    
+    # Strategy 4: Common class names
+    if not published_date:
+        for class_name in ["date", "published", "post-date", "pub-date"]:
+            date_elem = soup.find(class_=re.compile(class_name, re.I))
+            if date_elem:
+                date_str = date_elem.get_text(strip=True)
+                # Try to parse common date formats
+                for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%B %d, %Y"]:
+                    try:
+                        published_date = datetime.strptime(date_str, fmt)
+                        published_date = published_date.replace(tzinfo=timezone.utc)
+                        break
+                    except ValueError:
+                        continue
+                if published_date:
+                    break
+    
+    if published_date:
+        article_data["published_date"] = published_date
+    
+    # Extract article content - try multiple strategies
+    content_html = ""
+    content_text = ""
+    
+    # Strategy 1: <article> tag
+    article_tag = soup.find("article")
+    if article_tag:
+        content_html = str(article_tag)
+        content_text = article_tag.get_text(separator=" ", strip=True)
+    
+    # Strategy 2: Common content class names
+    if not content_text:
+        for class_name in ["content", "post-content", "article-content", "entry-content", "post-body"]:
+            content_elem = soup.find(class_=re.compile(class_name, re.I))
+            if content_elem:
+                content_html = str(content_elem)
+                content_text = content_elem.get_text(separator=" ", strip=True)
+                if len(content_text) > 100:  # Only use if substantial content
+                    break
+    
+    # Strategy 3: <main> tag
+    if not content_text:
+        main_tag = soup.find("main")
+        if main_tag:
+            content_html = str(main_tag)
+            content_text = main_tag.get_text(separator=" ", strip=True)
+    
+    # Fallback: Use body content (remove header, footer, nav, aside)
+    if not content_text or len(content_text) < 100:
+        body = soup.find("body")
+        if body:
+            # Remove unwanted elements
+            for tag in body.find_all(["header", "footer", "nav", "aside", "script", "style"]):
+                tag.decompose()
+            content_html = str(body)
+            content_text = body.get_text(separator=" ", strip=True)
+    
+    # Clean up content
+    content_text = re.sub(r"\s+", " ", content_text).strip()
+    article_data["content"] = content_text
+    article_data["content_html"] = content_html
+    article_data["word_count"] = len(content_text.split())
+    
+    # Extract images
+    images = []
+    img_tags = soup.find_all("img")
+    for img in img_tags:
+        src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+        if src:
+            # Convert to absolute URL
+            try:
+                absolute_url = urljoin(url, src)
+                if absolute_url.startswith(("http://", "https://")):
+                    images.append(absolute_url)
+            except Exception:
+                continue
+    
+    # Also check for Open Graph images
+    og_image = soup.find("meta", property="og:image")
+    if og_image and og_image.get("content"):
+        og_image_url = urljoin(url, og_image.get("content"))
+        if og_image_url not in images:
+            images.insert(0, og_image_url)  # Add at beginning
+    
+    article_data["images"] = list(set(images))  # Remove duplicates
+    
+    return article_data
+
+
+def generate_url_hash(url: str) -> str:
+    """
+    Generate SHA256 hash of URL for deduplication (T099 - US5).
+    
+    Args:
+        url: URL to hash
+        
+    Returns:
+        Hexadecimal hash string (64 characters)
+    """
+    import hashlib
+    
+    # Normalize URL: remove fragment, lowercase, remove trailing slash
+    parsed = urlparse(url)
+    normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    if parsed.query:
+        normalized += f"?{parsed.query}"
+    normalized = normalized.lower().rstrip("/")
+    
+    # Generate hash
+    hash_obj = hashlib.sha256(normalized.encode("utf-8"))
+    return hash_obj.hexdigest()
