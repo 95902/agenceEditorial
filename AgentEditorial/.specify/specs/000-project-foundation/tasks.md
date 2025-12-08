@@ -157,8 +157,8 @@
 
 ### Tests for User Story 2
 
--  T066 [P] [US2] Create unit test for site history queries in tests/unit/test_crud_profiles.py
--  T067 [P] [US2] Create E2E test for site history API in tests/e2e/test_api_sites.py
+- [x] T066 [P] [US2] Create unit test for site history queries in tests/unit/test_crud_profiles.py
+- [x] T067 [P] [US2] Create E2E test for site history API in tests/e2e/test_api_sites.py
 
 ### Implementation for User Story 2
 
@@ -180,9 +180,9 @@
 
 ### Tests for User Story 3
 
--  T073 [P] [US3] Create unit test for competitor search sources (mocked) in tests/unit/test_competitor_search.py
--  T074 [P] [US3] Create integration test for competitor agent in tests/integration/test_agent_competitor.py
--  T075 [P] [US3] Create E2E test for competitor search API in tests/e2e/test_api_competitors.py
+- [x] T073 [P] [US3] Create unit test for competitor search sources (mocked) in tests/unit/test_competitor_search.py
+- [x] T074 [P] [US3] Create integration test for competitor agent in tests/integration/test_agent_competitor.py
+- [x] T075 [P] [US3] Create E2E test for competitor search API in tests/e2e/test_api_competitors.py
 
 ### Implementation for User Story 3
 
@@ -222,14 +222,14 @@
 
 ### Tests for User Story 4
 
--  T088 [P] [US4] Create E2E test for competitor validation API in tests/e2e/test_api_competitors.py
+- [x] T088 [P] [US4] Create E2E test for competitor validation API in tests/e2e/test_api_competitors.py
 
 ### Implementation for User Story 4
 
--  T089 [US4] Implement POST /api/v1/competitors/{domain}/validate endpoint in python_scripts/api/routers/competitors.py
--  T090 [US4] Add validation logic (check domain existence, flag manual/excluded) in python_scripts/api/routers/competitors.py
--  T091 [US4] Update competitor storage in workflow_executions.output_data to include validation flags (validated, manual, excluded) as metadata
--  T092 [US4] Add request schema for competitor validation in python_scripts/api/schemas/requests.py
+- [x] T089 [US4] Implement POST /api/v1/competitors/{domain}/validate endpoint in python_scripts/api/routers/competitors.py
+- [x] T090 [US4] Add validation logic (check domain existence, flag manual/excluded) in python_scripts/api/routers/competitors.py
+- [x] T091 [US4] Update competitor storage in workflow_executions.output_data to include validation flags (validated, manual, excluded) as metadata
+- [x] T092 [US4] Add request schema for competitor validation in python_scripts/api/schemas/requests.py
 
 **Checkpoint**: User Story 4 complete - can validate and adjust competitor lists
 
@@ -243,36 +243,36 @@
 
 ### Tests for User Story 5
 
--  T093 [P] [US5] Create unit test for sitemap detection in tests/unit/test_detect_sitemaps.py
--  T094 [P] [US5] Create integration test for scraping workflow in tests/integration/test_scraping_workflow.py
--  T095 [P] [US5] Create E2E test for scraping API in tests/e2e/test_api_scraping.py
+- [x] T093 [P] [US5] Create unit test for sitemap detection in tests/unit/test_detect_sitemaps.py
+- [x] T094 [P] [US5] Create integration test for scraping workflow in tests/integration/test_scraping_workflow.py
+- [x] T095 [P] [US5] Create E2E test for scraping API in tests/e2e/test_api_scraping.py
 
 ### Implementation for User Story 5
 
 #### Scraping Agent
 
--  T096 [US5] Implement agent_scraping.py with article discovery (sitemap, RSS, heuristics)
--  T097 [US5] Implement article extraction from HTML (title, author, date, content, images) in python_scripts/ingestion/crawl_pages.py
--  T098 [US5] Add article filtering logic (min 250 words, max 2 years old) in python_scripts/agents/agent_scraping.py
--  T099 [US5] Implement URL deduplication by hash in python_scripts/agents/agent_scraping.py
+- [x] T096 [US5] Implement agent_scraping.py with article discovery (sitemap, RSS, heuristics)
+- [x] T097 [US5] Implement article extraction from HTML (title, author, date, content, images) in python_scripts/ingestion/crawl_pages.py
+- [x] T098 [US5] Add article filtering logic (min 250 words, max 2 years old) in python_scripts/agents/agent_scraping.py
+- [x] T099 [US5] Implement URL deduplication by hash in python_scripts/agents/agent_scraping.py
 
 #### Database
 
--  T100 [P] [US5] Implement CRUD operations for CompetitorArticle in python_scripts/database/crud_articles.py
--  T101 [US5] Implement scraping permissions caching (24h TTL) in python_scripts/ingestion/robots_txt.py
--  T102 [US5] Store scraping permissions in scraping_permissions table via CRUD
+- [x] T100 [P] [US5] Implement CRUD operations for CompetitorArticle in python_scripts/database/crud_articles.py
+- [x] T101 [US5] Implement scraping permissions caching (24h TTL) in python_scripts/ingestion/robots_txt.py
+- [x] T102 [US5] Store scraping permissions in scraping_permissions table via CRUD
 
 #### API Endpoints
 
--  T103 [US5] Implement POST /api/v1/scraping/competitors endpoint in python_scripts/api/routers/scraping.py (new router)
--  T104 [US5] Implement GET /api/v1/scraping/articles endpoint with filters (domain, limit, offset) in python_scripts/api/routers/scraping.py
--  T105 [US5] Add request/response schemas for scraping in python_scripts/api/schemas/requests.py and responses.py
--  T106 [US5] Register scraping router in python_scripts/api/main.py
+- [x] T103 [US5] Implement POST /api/v1/scraping/competitors endpoint in python_scripts/api/routers/scraping.py (new router)
+- [x] T104 [US5] Implement GET /api/v1/scraping/articles endpoint with filters (domain, limit, offset) in python_scripts/api/routers/scraping.py
+- [x] T105 [US5] Add request/response schemas for scraping in python_scripts/api/schemas/requests.py and responses.py
+- [x] T106 [US5] Register scraping router in python_scripts/api/main.py
 
 #### Workflow Integration
 
--  T107 [US5] Integrate scraping workflow in python_scripts/agents/agent_orchestrator.py
--  T108 [US5] Add scraping background task runner in python_scripts/api/routers/scraping.py
+- [x] T107 [US5] Integrate scraping workflow in python_scripts/agents/agent_orchestrator.py
+- [x] T108 [US5] Add scraping background task runner in python_scripts/api/routers/scraping.py
 
 **Checkpoint**: User Story 5 complete - can scrape competitor articles ethically
 
@@ -286,16 +286,16 @@
 
 ### Tests for User Story 6
 
--  T109 [P] [US6] Create integration test for Qdrant indexing in tests/integration/test_qdrant_integration.py
--  T110 [P] [US6] Create unit test for embeddings generation in tests/unit/test_embeddings_utils.py
+- [x] T109 [P] [US6] Create integration test for Qdrant indexing in tests/integration/test_qdrant_integration.py
+- [x] T110 [P] [US6] Create unit test for embeddings generation in tests/unit/test_embeddings_utils.py
 
 ### Implementation for User Story 6
 
--  T111 [US6] Implement automatic embedding generation after article scraping in python_scripts/agents/agent_scraping.py
--  T112 [US6] Implement Qdrant indexing pipeline (generate embedding → upsert with payload) in python_scripts/vectorstore/qdrant_client.py
--  T113 [US6] Implement duplicate detection via cosine similarity (threshold 0.92) in python_scripts/vectorstore/qdrant_client.py
--  T114 [US6] Link Qdrant point_id to competitor_articles.qdrant_point_id in python_scripts/database/crud_articles.py
--  T115 [US6] Add semantic search function (query embedding → Qdrant search) in python_scripts/vectorstore/qdrant_client.py
+- [x] T111 [US6] Implement automatic embedding generation after article scraping in python_scripts/agents/agent_scraping.py
+- [x] T112 [US6] Implement Qdrant indexing pipeline (generate embedding → upsert with payload) in python_scripts/vectorstore/qdrant_client.py
+- [x] T113 [US6] Implement duplicate detection via cosine similarity (threshold 0.92) in python_scripts/vectorstore/qdrant_client.py
+- [x] T114 [US6] Link Qdrant point_id to competitor_articles.qdrant_point_id in python_scripts/database/crud_articles.py
+- [x] T115 [US6] Add semantic search function (query embedding → Qdrant search) in python_scripts/vectorstore/qdrant_client.py
 
 **Checkpoint**: User Story 6 complete - articles indexed semantically with deduplication
 
@@ -316,34 +316,34 @@
 
 #### Topic Modeling
 
--  T118 [US7] Implement agent_topic_modeling.py with BERTopic pipeline (from research.md)
--  T119 [US7] Configure BERTopic with optimal hyperparameters (min_topic_size=10, nr_topics="auto") in python_scripts/analysis/topic_modeling.py
--  T120 [US7] Implement temporal topic evolution analysis in python_scripts/analysis/topic_modeling.py
--  T121 [US7] Implement emerging topics detection (comparison time windows) in python_scripts/analysis/topic_modeling.py
--  T122 [US7] Implement topic hierarchy generation in python_scripts/analysis/topic_modeling.py
+- [x] T118 [US7] Implement agent_topic_modeling.py with BERTopic pipeline (from research.md)
+- [x] T119 [US7] Configure BERTopic with optimal hyperparameters (min_topic_size=10, nr_topics="auto") in python_scripts/analysis/topic_modeling.py
+- [x] T120 [US7] Implement temporal topic evolution analysis in python_scripts/analysis/topic_modeling.py
+- [x] T121 [US7] Implement emerging topics detection (comparison time windows) in python_scripts/analysis/topic_modeling.py
+- [x] T122 [US7] Implement topic hierarchy generation in python_scripts/analysis/topic_modeling.py
 
 #### Visualizations
 
--  T123 [US7] Generate BERTopic visualizations (topics 2D, barchart, evolution, heatmap) in python_scripts/analysis/topic_modeling.py
--  T124 [US7] Save visualizations to /mnt/user-data/outputs/visualizations/ (or configurable path) in python_scripts/analysis/topic_modeling.py
+- [x] T123 [US7] Generate BERTopic visualizations (topics 2D, barchart, evolution, heatmap) in python_scripts/analysis/topic_modeling.py
+- [x] T124 [US7] Save visualizations to /mnt/user-data/outputs/visualizations/ (or configurable path) in python_scripts/analysis/topic_modeling.py
 
 #### Database
 
--  T125 [P] [US7] Implement CRUD operations for BertopicAnalysis in python_scripts/database/crud_topics.py
--  T126 [US7] Store BERTopic results (topics, hierarchy, evolution, visualization paths) in bertopic_analysis table
--  T127 [US7] Link topics to articles via topic_id in competitor_articles table
+- [x] T125 [P] [US7] Implement CRUD operations for BertopicAnalysis in python_scripts/database/crud_topics.py
+- [x] T126 [US7] Store BERTopic results (topics, hierarchy, evolution, visualization paths) in bertopic_analysis table
+- [x] T127 [US7] Link topics to articles via topic_id in competitor_articles table
 
 #### API Endpoints
 
--  T128 [US7] Implement POST /api/v1/trends/analyze endpoint in python_scripts/api/routers/trends.py
--  T129 [US7] Implement GET /api/v1/trends/topics endpoint with time_window filter in python_scripts/api/routers/trends.py
--  T130 [US7] Add request/response schemas for trends in python_scripts/api/schemas/requests.py and responses.py
--  T131 [US7] Register trends router in python_scripts/api/main.py
+- [x] T128 [US7] Implement POST /api/v1/trends/analyze endpoint in python_scripts/api/routers/trends.py
+- [x] T129 [US7] Implement GET /api/v1/trends/topics endpoint with time_window filter in python_scripts/api/routers/trends.py
+- [x] T130 [US7] Add request/response schemas for trends in python_scripts/api/schemas/requests.py and responses.py
+- [x] T131 [US7] Register trends router in python_scripts/api/main.py
 
 #### Workflow Integration
 
--  T132 [US7] Integrate BERTopic analysis workflow in python_scripts/agents/agent_orchestrator.py
--  T133 [US7] Add trends analysis background task runner in python_scripts/api/routers/trends.py
+- [x] T132 [US7] Integrate BERTopic analysis workflow in python_scripts/agents/agent_orchestrator.py
+- [x] T133 [US7] Add trends analysis background task runner in python_scripts/api/routers/trends.py
 
 **Checkpoint**: User Story 7 complete - can analyze trends with BERTopic and generate visualizations
 
