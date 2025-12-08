@@ -43,8 +43,8 @@ class CompetitorResponse(BaseModel):
     """Response schema for competitor."""
 
     domain: str
-    relevance_score: float
-    confidence_score: float
+    relevance_score: float = 0.0
+    confidence_score: float = 0.0
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -56,25 +56,25 @@ class CompetitorListResponse(BaseModel):
 
 
 class ArticleResponse(BaseModel):
-    """Response schema for article."""
+    """Response schema for article (T105 - US5)."""
 
-    id: int
-    domain: str
-    url: str
-    title: str
-    author: Optional[str] = None
-    published_date: Optional[datetime] = None
-    word_count: int
-    created_at: datetime
+    id: int = Field(..., description="Article ID")
+    domain: str = Field(..., description="Domain name")
+    url: str = Field(..., description="Article URL")
+    title: str = Field(..., description="Article title")
+    author: Optional[str] = Field(None, description="Article author")
+    published_date: Optional[datetime] = Field(None, description="Publication date")
+    word_count: int = Field(..., description="Word count")
+    created_at: datetime = Field(..., description="Creation timestamp")
 
 
 class ArticleListResponse(BaseModel):
-    """Response schema for article list."""
+    """Response schema for article list (T105 - US5)."""
 
-    articles: List[ArticleResponse]
-    total: int
-    limit: int
-    offset: int
+    articles: List[ArticleResponse] = Field(..., description="List of articles")
+    total: int = Field(..., description="Total number of articles")
+    limit: int = Field(..., description="Limit applied")
+    offset: int = Field(..., description="Offset applied")
 
 
 class TopicResponse(BaseModel):
@@ -93,6 +93,46 @@ class TopicsResponse(BaseModel):
     topics: List[TopicResponse]
     total: int
     time_window_days: int
+
+
+class TrendsAnalysisResponse(BaseModel):
+    """Response schema for trends analysis (T130 - US7)."""
+
+    execution_id: str
+    status: str
+    message: str
+
+
+class TopicKeywordResponse(BaseModel):
+    """Response schema for a single topic keyword."""
+    
+    word: str
+    score: float
+
+
+class TopicInfoResponse(BaseModel):
+    """Response schema for topic information (T130 - US7)."""
+
+    topic_id: int
+    name: str
+    keywords: List[TopicKeywordResponse]
+    count: int
+    growth_rate: Optional[float] = None
+    is_emerging: Optional[bool] = None
+
+
+class TrendsTopicsResponse(BaseModel):
+    """Response schema for trends topics list (T130 - US7)."""
+
+    analysis_id: int
+    analysis_date: str
+    time_window_days: int
+    domains_included: List[str]
+    topics: List[TopicInfoResponse]
+    emerging_topics: List[TopicInfoResponse]
+    total_topics: int
+    total_articles: int
+    visualizations: Optional[Dict[str, str]] = None
 
 
 class GapResponse(BaseModel):
@@ -146,6 +186,10 @@ class SiteHistoryResponse(BaseModel):
     first_analysis_date: Optional[datetime] = None
     last_analysis_date: Optional[datetime] = None
 
+
+# ============================================================
+# Error Response Schema
+# ============================================================
 
 class ErrorResponse(BaseModel):
     """Response schema for errors."""

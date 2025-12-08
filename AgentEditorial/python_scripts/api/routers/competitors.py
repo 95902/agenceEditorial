@@ -1,5 +1,6 @@
 """API router for competitor search endpoints."""
 
+import time
 from typing import List, Optional
 from uuid import UUID
 
@@ -8,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.agents.agent_competitor import CompetitorSearchAgent
 from python_scripts.api.dependencies import get_db_session as get_db
-from python_scripts.api.schemas.requests import CompetitorSearchRequest
+from python_scripts.api.schemas.requests import (
+    CompetitorSearchRequest,
+    CompetitorValidationRequest,
+)
 from python_scripts.api.schemas.responses import (
     CompetitorListResponse,
     CompetitorResponse,
@@ -243,18 +247,32 @@ async def get_competitors(
             )
 
         # Convert to response format
-        competitors = [
-            CompetitorResponse(
-                domain=comp.get("domain", ""),
-                relevance_score=comp.get("relevance_score", 0.0),
-                confidence_score=comp.get("confidence_score", 0.0),
-                metadata={
-                    "reason": comp.get("reason", ""),
-                    "combined_score": comp.get("combined_score", 0.0),
-                },
+        competitors = []
+        for comp in competitors_data:
+            # Ensure scores are not None
+            relevance_score = comp.get("relevance_score")
+            if relevance_score is None:
+                relevance_score = 0.0
+            else:
+                relevance_score = float(relevance_score)
+            
+            confidence_score = comp.get("confidence_score")
+            if confidence_score is None:
+                confidence_score = 0.0
+            else:
+                confidence_score = float(confidence_score)
+            
+            competitors.append(
+                CompetitorResponse(
+                    domain=comp.get("domain", ""),
+                    relevance_score=relevance_score,
+                    confidence_score=confidence_score,
+                    metadata={
+                        "reason": comp.get("reason", ""),
+                        "combined_score": comp.get("combined_score", 0.0),
+                    },
+                )
             )
-            for comp in competitors_data
-        ]
 
         return CompetitorListResponse(
             competitors=competitors,
@@ -268,5 +286,192 @@ async def get_competitors(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get competitors: {e}",
+        )
+
+
+@router.post(
+    "/{domain}/validate",
+    response_model=CompetitorListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Validate and adjust competitor list",
+    description="Validate or adjust the competitor list for a domain. Mark competitors as validated, manual, or excluded.",
+)
+async def validate_competitors(
+    domain: str,
+    request: CompetitorValidationRequest,
+    db: AsyncSession = Depends(get_db),
+) -> CompetitorListResponse:
+    """
+    Validate and adjust competitor list for a domain (T089-T092 - US4).
+
+    Args:
+        domain: Domain name
+        request: Validation request with competitor list and flags
+        db: Database session
+
+    Returns:
+        Updated competitor list
+
+    Raises:
+        HTTPException: If no competitor search found or validation fails
+    """
+    try:
+        from sqlalchemy import select, desc
+
+        from python_scripts.database.models import WorkflowExecution
+
+        # Find latest completed competitor search for this domain
+        stmt = (
+            select(WorkflowExecution)
+            .where(
+                WorkflowExecution.workflow_type == "competitor_search",
+                WorkflowExecution.status == "completed",
+                WorkflowExecution.input_data["domain"].astext == domain,
+            )
+            .order_by(desc(WorkflowExecution.start_time))
+            .limit(1)
+        )
+
+        result = await db.execute(stmt)
+        execution = result.scalar_one_or_none()
+
+        if not execution or not execution.output_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No competitor search results found for domain: {domain}",
+            )
+
+        # Get existing competitors
+        existing_competitors = execution.output_data.get("competitors", [])
+        all_candidates = execution.output_data.get("all_candidates", [])
+
+        # Create domain mapping for quick lookup (normalize domains to lowercase for comparison)
+        competitor_map = {comp.get("domain", "").lower(): comp for comp in existing_competitors}
+        candidate_map = {cand.get("domain", "").lower(): cand for cand in all_candidates}
+
+        # Collect domains from request for quick lookup
+        requested_domains = set()
+        for comp_data in request.competitors:
+            comp_domain = comp_data.get("domain")
+            if comp_domain:
+                requested_domains.add(comp_domain.lower())
+
+        # Process validation request
+        validated_competitors = []
+        processed_domains = set()
+
+        # Process competitors from request
+        for comp_data in request.competitors:
+            comp_domain = comp_data.get("domain")
+            if not comp_domain:
+                continue
+
+            comp_domain_lower = comp_domain.lower()
+            processed_domains.add(comp_domain_lower)
+
+            # Get competitor data (from existing or candidates)
+            competitor = competitor_map.get(comp_domain_lower) or candidate_map.get(comp_domain_lower)
+            if not competitor:
+                # New manual competitor
+                competitor = {
+                    "domain": comp_domain,
+                    "url": comp_data.get("url", f"https://{comp_domain}"),
+                    "title": comp_data.get("title", ""),
+                    "reason": comp_data.get("reason", "Manually added"),
+                    "source": "manual",
+                    "relevance_score": comp_data.get("relevance_score", 0.5),
+                    "confidence_score": comp_data.get("confidence_score", 0.5),
+                    "combined_score": comp_data.get("combined_score", 0.5),
+                }
+
+            # Apply validation flags
+            validation_status = comp_data.get("validation_status", "validated")
+            competitor["validation_status"] = validation_status
+            competitor["validated"] = validation_status == "validated"
+            competitor["manual"] = validation_status == "manual"
+            competitor["excluded"] = validation_status == "excluded"
+
+            # Only include validated and manual competitors
+            if validation_status in ["validated", "manual"]:
+                validated_competitors.append(competitor)
+
+        # Preserve existing competitors that were NOT in the request
+        # (they are kept as validated by default since they were already in the list)
+        for existing_comp in existing_competitors:
+            existing_domain = existing_comp.get("domain", "").lower()
+            if existing_domain not in processed_domains:
+                # Not in request, preserve it as validated
+                # Create a copy to avoid modifying the original dict
+                preserved_comp = existing_comp.copy()
+                preserved_comp["validation_status"] = "validated"
+                preserved_comp["validated"] = True
+                preserved_comp["manual"] = False
+                preserved_comp["excluded"] = False
+                validated_competitors.append(preserved_comp)
+
+        # Update execution output_data with validation flags
+        updated_output_data = execution.output_data.copy()
+        updated_output_data["competitors"] = validated_competitors
+        updated_output_data["validation_date"] = time.time()
+
+        # Update execution
+        from python_scripts.database.crud_executions import update_workflow_execution
+
+        await update_workflow_execution(
+            db,
+            execution,
+            output_data=updated_output_data,
+        )
+
+        logger.info(
+            "Competitors validated",
+            domain=domain,
+            validated_count=len(validated_competitors),
+        )
+
+        # Convert to response format
+        competitors = []
+        for comp in validated_competitors:
+            # Ensure scores are not None
+            relevance_score = comp.get("relevance_score")
+            if relevance_score is None:
+                relevance_score = 0.0
+            else:
+                relevance_score = float(relevance_score)
+            
+            confidence_score = comp.get("confidence_score")
+            if confidence_score is None:
+                confidence_score = 0.0
+            else:
+                confidence_score = float(confidence_score)
+            
+            competitors.append(
+                CompetitorResponse(
+                    domain=comp.get("domain", ""),
+                    relevance_score=relevance_score,
+                    confidence_score=confidence_score,
+                    metadata={
+                        "reason": comp.get("reason", ""),
+                        "combined_score": comp.get("combined_score", 0.0),
+                        "validation_status": comp.get("validation_status", "validated"),
+                        "validated": comp.get("validated", False),
+                        "manual": comp.get("manual", False),
+                        "excluded": comp.get("excluded", False),
+                    },
+                )
+            )
+
+        return CompetitorListResponse(
+            competitors=competitors,
+            total=len(competitors),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to validate competitors", domain=domain, error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to validate competitors: {e}",
         )
 
