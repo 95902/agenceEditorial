@@ -56,7 +56,16 @@ python -m spacy download fr_core_news_md
 alembic upgrade head
 
 # 9. Créer la collection Qdrant
-python scripts/init_qdrant.py
+make init-qdrant
+# ou: uv run python scripts/init_qdrant.py
+
+# 10. (Optionnel) Indexer les articles existants dans Qdrant
+# Si vous avez des articles dans la base qui n'ont pas encore été indexés
+uv run python scripts/index_existing_articles.py
+# Ou pour un domaine spécifique:
+uv run python scripts/index_existing_articles.py example.com
+# ou utiliser la cible Makefile:
+make index-articles DOMAIN=example.com
 
 # 10. Démarrer l'API
 uvicorn python_scripts.api.main:app --reload --host 0.0.0.0 --port 8000
