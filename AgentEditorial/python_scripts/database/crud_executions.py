@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.database.models import SiteAnalysisResult, WorkflowExecution
+from python_scripts.database.crud_topics import make_json_serializable
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -110,7 +111,8 @@ async def update_workflow_execution(
                 execution.duration_seconds = int(delta.total_seconds())
 
     if output_data is not None:
-        execution.output_data = output_data
+        # Ensure output_data is JSON-serializable (handle infinity, NaN, etc.)
+        execution.output_data = make_json_serializable(output_data)
 
     if error_message is not None:
         execution.error_message = error_message
@@ -154,11 +156,17 @@ async def create_site_analysis_result(
     Returns:
         Created SiteAnalysisResult instance
     """
+    # Import here to avoid circular dependency
+    from python_scripts.utils.json_utils import normalize_json_dict
+    
+    # Normalize phase_results to ensure all JSON strings are parsed
+    normalized_results = normalize_json_dict(phase_results) if isinstance(phase_results, dict) else phase_results
+    
     result = SiteAnalysisResult(
         site_profile_id=site_profile_id,
         execution_id=execution_id,
         analysis_phase=analysis_phase,
-        phase_results=phase_results,
+        phase_results=normalized_results,
         llm_model_used=llm_model_used,
         processing_time_seconds=processing_time_seconds,
     )

@@ -1,12 +1,13 @@
 """CRUD operations for SiteProfile model."""
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.database.models import SiteProfile
+from python_scripts.utils.json_utils import normalize_json_value
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -98,9 +99,24 @@ async def update_site_profile(
     Returns:
         Updated SiteProfile instance
     """
+    # JSON fields that should be normalized
+    json_fields = {
+        "target_audience",
+        "activity_domains",
+        "content_structure",
+        "keywords",
+        "style_features",
+        "llm_models_used",
+    }
+    
     for key, value in kwargs.items():
         if hasattr(profile, key):
-            setattr(profile, key, value)
+            # Normalize JSON fields to ensure proper structure
+            if key in json_fields and value is not None:
+                normalized_value = normalize_json_value(value)
+                setattr(profile, key, normalized_value)
+            else:
+                setattr(profile, key, value)
 
     profile.updated_at = datetime.now(timezone.utc)
     await db_session.commit()
