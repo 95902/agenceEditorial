@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.agents.agent_analysis import EditorialAnalysisAgent
 from python_scripts.agents.agent_competitor import CompetitorSearchAgent
+from python_scripts.agents.agent_scraping import ScrapingAgent
+from python_scripts.agents.agent_topic_modeling import TopicModelingAgent
 from python_scripts.database.crud_executions import (
     create_site_analysis_result,
     create_workflow_execution,
@@ -36,6 +38,8 @@ class EditorialAnalysisOrchestrator:
         self.db_session = db_session
         self.analysis_agent = EditorialAnalysisAgent()
         self.competitor_agent = CompetitorSearchAgent()
+        self.scraping_agent = ScrapingAgent()
+        self.topic_modeling_agent = TopicModelingAgent()
         self.logger = get_logger(__name__)
 
     async def run_editorial_analysis(
@@ -94,11 +98,9 @@ class EditorialAnalysisOrchestrator:
             # Step 2: Crawl pages
             self.logger.info("Step 2: Crawling pages", domain=domain, url_count=len(urls_to_crawl))
             crawled_pages = await crawl_multiple_pages(
-                self.db_session,
                 urls_to_crawl,
-                domain,
-                max_pages=max_pages,
-                respect_robots_txt=True,
+                db_session=self.db_session,
+                respect_robots=True,
                 use_cache=True,
             )
 
@@ -163,6 +165,28 @@ class EditorialAnalysisOrchestrator:
                 },
                 was_success=True,
             )
+
+            # Step 9: Launch automatic scraping of client site
+            self.logger.info("Step 9: Launching automatic scraping of client site", domain=domain)
+            try:
+                scraping_result = await self.run_scraping_workflow(
+                    domains=[domain],
+                    max_articles_per_domain=max_pages,
+                    is_client_site=True,
+                    site_profile_id=site_profile.id,
+                )
+                self.logger.info(
+                    "Client site scraping completed",
+                    domain=domain,
+                    articles_scraped=scraping_result.get("total_articles_scraped", 0),
+                )
+            except Exception as e:
+                # Don't fail the entire workflow if scraping fails
+                self.logger.error(
+                    "Failed to scrape client site",
+                    domain=domain,
+                    error=str(e),
+                )
 
             self.logger.info(
                 "Workflow completed",
@@ -309,4 +333,238 @@ class EditorialAnalysisOrchestrator:
                 )
 
             raise WorkflowError(f"Competitor search workflow failed: {e}") from e
+
+    async def run_scraping_workflow(
+        self,
+        domains: List[str],
+        max_articles_per_domain: int = 500,
+        execution_id: Optional[UUID] = None,
+        is_client_site: bool = False,
+        site_profile_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run scraping workflow for competitor domains (T107 - US5).
+
+        Args:
+            domains: List of domains to scrape
+            max_articles_per_domain: Maximum articles per domain
+            execution_id: Optional execution ID (if None, creates new)
+            is_client_site: Whether this is a client site (uses client_articles collection)
+            site_profile_id: Site profile ID (required if is_client_site=True)
+
+        Returns:
+            Workflow execution result with scraped articles
+
+        Raises:
+            WorkflowError: If workflow fails
+        """
+        # Create or get execution
+        if execution_id:
+            execution = await get_workflow_execution(self.db_session, execution_id)
+            if not execution:
+                raise WorkflowError(f"Execution {execution_id} not found")
+        else:
+            execution = await create_workflow_execution(
+                self.db_session,
+                workflow_type="scraping",
+                input_data={
+                    "domains": domains,
+                    "max_articles_per_domain": max_articles_per_domain,
+                },
+                status="pending",
+            )
+            execution_id = execution.execution_id
+
+        try:
+            # Transition to running
+            await update_workflow_execution(
+                self.db_session,
+                execution,
+                status="running",
+            )
+            self.logger.info(
+                "Scraping workflow started",
+                execution_id=str(execution_id),
+                domains=domains,
+            )
+
+            # Run scraping agent
+            result = await self.scraping_agent.execute(
+                execution_id,
+                {
+                    "domains": domains,
+                    "max_articles_per_domain": max_articles_per_domain,
+                },
+                db_session=self.db_session,
+                is_client_site=is_client_site,
+                site_profile_id=site_profile_id,
+            )
+
+            # Update execution with results
+            await update_workflow_execution(
+                self.db_session,
+                execution,
+                status="completed",
+                output_data=result,
+                was_success=True,
+            )
+
+            stats = result.get("statistics", {})
+            self.logger.info(
+                "Scraping workflow completed",
+                execution_id=str(execution_id),
+                domains=domains,
+                total_articles_scraped=result.get("total_articles_scraped", 0),
+                statistics=stats,
+            )
+
+            return result
+
+        except Exception as e:
+            # Update execution with error
+            error_message = str(e)
+            self.logger.error(
+                "Scraping workflow failed",
+                execution_id=str(execution_id),
+                domains=domains,
+                error=error_message,
+            )
+
+            try:
+                await update_workflow_execution(
+                    self.db_session,
+                    execution,
+                    status="failed",
+                    error_message=error_message,
+                    was_success=False,
+                )
+            except Exception as update_error:
+                self.logger.error(
+                    "Failed to update execution status",
+                    execution_id=str(execution_id),
+                    error=str(update_error),
+                )
+
+            raise WorkflowError(f"Scraping workflow failed: {e}") from e
+
+    async def run_trends_analysis_workflow(
+        self,
+        domains: List[str],
+        time_window_days: int = 365,
+        min_topic_size: Optional[int] = None,
+        nr_topics: Optional[str | int] = None,
+        execution_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run trends analysis workflow with BERTopic (T132 - US7).
+
+        Args:
+            domains: List of domains to analyze
+            time_window_days: Time window in days (default: 365)
+            min_topic_size: Minimum articles per topic (optional)
+            nr_topics: Number of topics or "auto" (optional)
+            execution_id: Optional execution ID (if None, creates new)
+
+        Returns:
+            Workflow execution result with topics and analysis
+
+        Raises:
+            WorkflowError: If workflow fails
+        """
+        # Create or get execution
+        if execution_id:
+            execution = await get_workflow_execution(self.db_session, execution_id)
+            if not execution:
+                raise WorkflowError(f"Execution {execution_id} not found")
+        else:
+            execution = await create_workflow_execution(
+                self.db_session,
+                workflow_type="trends_analysis",
+                input_data={
+                    "domains": domains,
+                    "time_window_days": time_window_days,
+                    "min_topic_size": min_topic_size,
+                    "nr_topics": nr_topics,
+                },
+                status="pending",
+            )
+            execution_id = execution.execution_id
+
+        try:
+            # Transition to running
+            await update_workflow_execution(
+                self.db_session,
+                execution,
+                status="running",
+            )
+            self.logger.info(
+                "Trends analysis workflow started",
+                execution_id=str(execution_id),
+                domains=domains,
+                time_window_days=time_window_days,
+            )
+
+            # Prepare input data
+            input_data = {
+                "domains": domains,
+                "time_window_days": time_window_days,
+            }
+            if min_topic_size is not None:
+                input_data["min_topic_size"] = min_topic_size
+            if nr_topics is not None:
+                input_data["nr_topics"] = nr_topics
+
+            # Run topic modeling agent
+            result = await self.topic_modeling_agent.execute(
+                execution_id,
+                input_data,
+                db_session=self.db_session,
+            )
+
+            # Update execution with results
+            await update_workflow_execution(
+                self.db_session,
+                execution,
+                status="completed",
+                output_data=result,
+                was_success=True,
+            )
+
+            stats = result.get("statistics", {})
+            self.logger.info(
+                "Trends analysis workflow completed",
+                execution_id=str(execution_id),
+                domains=domains,
+                num_topics=stats.get("num_topics", 0),
+                total_articles=stats.get("total_articles", 0),
+            )
+
+            return result
+
+        except Exception as e:
+            # Update execution with error
+            error_message = str(e)
+            self.logger.error(
+                "Trends analysis workflow failed",
+                execution_id=str(execution_id),
+                domains=domains,
+                error=error_message,
+            )
+
+            try:
+                await update_workflow_execution(
+                    self.db_session,
+                    execution,
+                    status="failed",
+                    error_message=error_message,
+                    was_success=False,
+                )
+            except Exception as update_error:
+                self.logger.error(
+                    "Failed to update execution status",
+                    execution_id=str(execution_id),
+                    error=str(update_error),
+                )
+
+            raise WorkflowError(f"Trends analysis workflow failed: {e}") from e
 

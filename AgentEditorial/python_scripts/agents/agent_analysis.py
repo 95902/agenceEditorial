@@ -136,6 +136,16 @@ def extract_partial_json(json_text: str, model_name: str) -> Dict[str, Any]:
             # Try as JSON first
             result[key] = json.loads(value)
         except (json.JSONDecodeError, ValueError):
+            # If not valid JSON, try to parse as nested JSON string
+            # Check if value looks like a JSON string (starts with { or [)
+            value_stripped = value.strip('"').strip("'")
+            if value_stripped.startswith(("{", "[")):
+                try:
+                    result[key] = json.loads(value_stripped)
+                    continue
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            
             # If not valid JSON, try to infer type
             if value.lower() in ("true", "false"):
                 result[key] = value.lower() == "true"
@@ -162,6 +172,58 @@ def extract_partial_json(json_text: str, model_name: str) -> Dict[str, Any]:
         extracted_keys=list(result.keys()),
     )
     return result
+
+
+def normalize_json_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize and validate JSON data from LLM responses.
+    
+    Ensures that:
+    - String values that are JSON are parsed
+    - Expected dict/list structures are properly formatted
+    - Invalid data is cleaned or removed
+    
+    Args:
+        data: Raw data dictionary from LLM
+        
+    Returns:
+        Normalized data dictionary
+    """
+    normalized = {}
+    
+    for key, value in data.items():
+        if value is None:
+            normalized[key] = None
+        elif isinstance(value, str):
+            # Try to parse if it looks like JSON
+            value_stripped = value.strip()
+            if value_stripped.startswith(("{", "[")):
+                try:
+                    parsed = json.loads(value_stripped)
+                    normalized[key] = normalize_json_data(parsed) if isinstance(parsed, dict) else parsed
+                except (json.JSONDecodeError, ValueError):
+                    # If parsing fails, keep as string but log warning
+                    logger.warning(
+                        "Could not parse JSON string value",
+                        key=key,
+                        value_preview=value[:100],
+                    )
+                    normalized[key] = value
+            else:
+                normalized[key] = value
+        elif isinstance(value, dict):
+            # Recursively normalize nested dicts
+            normalized[key] = normalize_json_data(value)
+        elif isinstance(value, list):
+            # Normalize list items
+            normalized[key] = [
+                normalize_json_data(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            normalized[key] = value
+    
+    return normalized
 
 
 class EditorialAnalysisAgent(BaseAgent):
@@ -228,6 +290,8 @@ class EditorialAnalysisAgent(BaseAgent):
 
             try:
                 result = extract_and_parse_json(response_text, model_name)
+                # Normalize the result to ensure proper JSON structure
+                result = normalize_json_data(result)
             except LLMError as e:
                 # Log full response for debugging (truncated to 2000 chars)
                 logger.error(
@@ -301,6 +365,8 @@ class EditorialAnalysisAgent(BaseAgent):
 
             try:
                 synthesized = extract_and_parse_json(response_text, "llama3:8b (synthesis)")
+                # Normalize the synthesized result to ensure proper JSON structure
+                synthesized = normalize_json_data(synthesized)
             except LLMError as e:
                 # Log full response for debugging
                 logger.error(
@@ -336,16 +402,22 @@ class EditorialAnalysisAgent(BaseAgent):
         Args:
             llama3_result: Llama3 analysis results
             mistral_result: Mistral analysis results
-            phi3_result: Phi3 analysis results
+            phi3_result: Phi3 analysis results (contains detailed activity_domains)
 
         Returns:
             Merged editorial profile
         """
+        # Use phi3's activity_domains as they are more detailed
+        activity_domains = phi3_result.get("activity_domains", {})
+        # Fallback to llama3 if phi3 doesn't have activity_domains
+        if not activity_domains:
+            activity_domains = llama3_result.get("activity_domains", {})
+        
         return {
             "language_level": llama3_result.get("language_level", "intermediate"),
             "editorial_tone": llama3_result.get("editorial_tone", "professional"),
             "target_audience": llama3_result.get("target_audience", {}),
-            "activity_domains": llama3_result.get("activity_domains", {}),
+            "activity_domains": activity_domains,  # Use phi3's detailed domains
             "content_structure": mistral_result.get("content_structure", {}),
             "keywords": phi3_result.get("keywords", {}),
             "style_features": llama3_result.get("style_features", {}),

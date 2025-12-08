@@ -296,6 +296,7 @@ class CompetitorSearchConfig:
                 "univ-grenoble-alpes.fr",
                 "university.parisnanterre.fr",
                 "sorbonne-universite.fr",
+                "lescrous.fr",
                 "psl.eu",
                 # Écoles de commerce
                 "em-lyon.com",

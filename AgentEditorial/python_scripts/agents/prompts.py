@@ -14,6 +14,10 @@ Provide a detailed analysis including:
 4. Activity domains
 5. Key stylistic features
 
+IMPORTANT: 
+- Extract ALL values from the content provided above, do NOT use placeholder or example values
+- Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not use escaped quotes or nested JSON strings.
+
 Format your response as JSON with the following structure:
 {{
     "language_level": "...",
@@ -27,7 +31,7 @@ Format your response as JSON with the following structure:
         "secondary_domains": [...]
     }},
     "style_features": {{
-        "sentence_length_avg": ...,
+        "sentence_length_avg": "...",
         "reading_level": "...",
         "formality_score": ...
     }}
@@ -46,6 +50,10 @@ Focus on:
 4. Media usage (images, videos)
 5. Internal linking patterns
 
+IMPORTANT: 
+- Extract ALL values from the content provided above, do NOT use placeholder or example values
+- Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not use escaped quotes or nested JSON strings.
+
 Format your response as JSON:
 {{
     "content_structure": {{
@@ -58,7 +66,7 @@ Format your response as JSON:
 }}
 """
 
-EDITORIAL_ANALYSIS_PROMPT_PHI3 = """Extract keywords and semantic analysis from the following website content.
+EDITORIAL_ANALYSIS_PROMPT_PHI3 = """Extract keywords, semantic analysis, and detailed activity domains from the following website content.
 
 Content:
 {content}
@@ -67,13 +75,34 @@ Extract:
 1. Primary keywords (top 10)
 2. Keyword density
 3. Semantic keywords (related terms)
+4. Activity domains - BE VERY DETAILED AND SPECIFIC:
+   - Identify ALL business domains, services, and sectors mentioned in the content
+   - Use specific, technical terms (e.g., "cloud infrastructure", "DevOps consulting", "penetration testing" instead of generic terms)
+   - Include sub-domains and specializations
+   - Minimum 5-8 primary domains, 8-12 secondary domains
+   - Be precise: avoid generic terms like "IT services" or "information technology"
+   - Extract ONLY from the content provided, do NOT use placeholder or example values
+
+IMPORTANT: Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not use escaped quotes or nested JSON strings.
 
 Format your response as JSON:
 {{
     "keywords": {{
-        "primary_keywords": [...],
-        "keyword_density": {{"keyword": density_percentage}},
-        "semantic_keywords": [...]
+        "primary_keywords": ["extract from content", "extract from content"],
+        "keyword_density": {{"keyword1": density_percentage, "keyword2": density_percentage}},
+        "semantic_keywords": ["related term from content", "related term from content"]
+    }},
+    "activity_domains": {{
+        "primary_domains": [
+            "Specific domain extracted from content",
+            "Specific domain extracted from content",
+            "Specific domain extracted from content"
+        ],
+        "secondary_domains": [
+            "Sub-domain or specialization from content",
+            "Sub-domain or specialization from content",
+            "Sub-domain or specialization from content"
+        ]
     }}
 }}
 """
@@ -88,6 +117,11 @@ Mistral Analysis:
 
 Phi3 Analysis:
 {phi3_analysis}
+
+IMPORTANT: 
+- Use Phi3's activity_domains (they are more detailed and specific than Llama3's)
+- Extract ALL values from the analyses provided above, do NOT use placeholder or example values
+- Respond ONLY with valid JSON. Do not include any text before or after the JSON. Do not use escaped quotes or nested JSON strings. All values must be properly formatted JSON (objects use {{}}, arrays use [], strings use "").
 
 Create a comprehensive editorial profile that combines all insights. Format as JSON:
 {{
@@ -104,7 +138,7 @@ Create a comprehensive editorial profile that combines all insights. Format as J
     "content_structure": {{
         "average_word_count": ...,
         "average_paragraph_count": ...,
-        "heading_patterns": [...],
+        "heading_patterns": {{"H2": ..., "H3": ...}},
         "media_usage": {{"images": ..., "videos": ...}},
         "internal_linking": ...
     }},
@@ -114,7 +148,7 @@ Create a comprehensive editorial profile that combines all insights. Format as J
         "semantic_keywords": [...]
     }},
     "style_features": {{
-        "sentence_length_avg": ...,
+        "sentence_length_avg": "...",
         "reading_level": "...",
         "formality_score": ...
     }}
@@ -170,7 +204,7 @@ Return your response as JSON in this format:
             "relevance_score": 0.3,
             "confidence_score": 0.8,
             "reason": "Government service / e-commerce / different industry, not a competitor"
-        }}
+}}
     ]
 }}
 
