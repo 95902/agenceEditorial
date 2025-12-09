@@ -32,7 +32,11 @@ from python_scripts.ingestion.crawl_pages import (
 from python_scripts.ingestion.detect_sitemaps import get_sitemap_urls
 from python_scripts.ingestion.robots_txt import parse_robots_txt
 from python_scripts.utils.logging import get_logger
-from python_scripts.vectorstore.qdrant_client import qdrant_client, COLLECTION_NAME
+from python_scripts.vectorstore.qdrant_client import (
+    qdrant_client,
+    COLLECTION_NAME,
+    get_competitor_collection_name,
+)
 
 logger = get_logger(__name__)
 
@@ -917,6 +921,8 @@ class ScrapingAgent(BaseAgent):
                         from python_scripts.vectorstore.qdrant_client import get_client_collection_name
                         collection_name = get_client_collection_name(domain)
                     else:
+                        # Note: client_domain not available in this context, using default collection
+                        # For trend pipeline, collection name is set via ClusteringConfig
                         collection_name = COLLECTION_NAME
                     qdrant_point_id = qdrant_client.index_article(
                         article_id=article.id,

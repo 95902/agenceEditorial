@@ -49,9 +49,21 @@ class ClusteringConfig:
     
     # Embedding settings
     use_qdrant_embeddings: bool = True
-    embedding_collection: str = "competitor_articles"
+    embedding_collection: Optional[str] = None  # Will be generated from client_domain if provided
+    client_domain: Optional[str] = None  # Client domain for generating collection name
     client_collection: str = "client_articles"
     normalize_embeddings: bool = True
+    
+    def __post_init__(self):
+        """Generate collection name from client_domain if not explicitly set."""
+        if self.embedding_collection is None:
+            if self.client_domain:
+                from python_scripts.vectorstore.qdrant_client import get_competitor_collection_name
+                self.embedding_collection = get_competitor_collection_name(self.client_domain)
+            else:
+                # Fallback to default collection name
+                from python_scripts.vectorstore.qdrant_client import COLLECTION_NAME
+                self.embedding_collection = COLLECTION_NAME
     
     # Filtering
     min_articles: int = 50

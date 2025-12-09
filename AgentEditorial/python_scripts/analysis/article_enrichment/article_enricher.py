@@ -237,7 +237,7 @@ class ArticleEnricher:
         
         # Build statistics dictionary
         statistics = {
-            "competitor_volume": cluster.article_count or 0,
+            "competitor_volume": cluster.size or 0,  # Use 'size' instead of 'article_count'
             "velocity": float(temporal_metric.velocity) if temporal_metric and temporal_metric.velocity else 0.0,
             "velocity_trend": "increasing" if temporal_metric and temporal_metric.velocity and float(temporal_metric.velocity) > 1.2 else "stable",
             "priority_score": float(gap.priority_score) if gap else 0.0,

@@ -165,7 +165,7 @@ async def run_trend_pipeline_task(
 ) -> None:
     """Background task to run trend pipeline."""
     try:
-        agent = TrendPipelineAgent(db)
+        agent = TrendPipelineAgent(db, client_domain=request.client_domain)
         
         # Determine domains
         domains = request.domains or []

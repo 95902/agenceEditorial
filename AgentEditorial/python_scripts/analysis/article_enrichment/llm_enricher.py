@@ -398,42 +398,60 @@ class ArticleLLMEnricher:
         # Strategy 1: Try to find JSON block between ```json and ```
         json_block_match = re.search(r"```json\s*(.*?)\s*```", response, re.DOTALL)
         if json_block_match:
+            json_text = json_block_match.group(1).strip()
+            # Try parsing directly first (most JSON responses are already valid)
             try:
-                json_text = json_block_match.group(1).strip()
-                json_text = self._fix_json_common_issues(json_text)
                 return json.loads(json_text)
             except json.JSONDecodeError:
-                pass
+                # If direct parsing fails, try fixing common issues
+                try:
+                    json_text = self._fix_json_common_issues(json_text)
+                    return json.loads(json_text)
+                except json.JSONDecodeError as e:
+                    logger.debug("Strategy 1 failed to parse JSON", error=str(e), json_preview=json_text[:200])
         
         # Strategy 2: Try to find JSON block between ``` and ```
         code_block_match = re.search(r"```\s*(.*?)\s*```", response, re.DOTALL)
         if code_block_match:
+            json_text = code_block_match.group(1).strip()
+            if json_text.startswith("json"):
+                json_text = json_text[4:].strip()
+            # Try parsing directly first
             try:
-                json_text = code_block_match.group(1).strip()
-                if json_text.startswith("json"):
-                    json_text = json_text[4:].strip()
-                json_text = self._fix_json_common_issues(json_text)
                 return json.loads(json_text)
             except json.JSONDecodeError:
-                pass
+                # If direct parsing fails, try fixing common issues
+                try:
+                    json_text = self._fix_json_common_issues(json_text)
+                    return json.loads(json_text)
+                except json.JSONDecodeError as e:
+                    logger.debug("Strategy 2 failed to parse JSON", error=str(e), json_preview=json_text[:200])
         
         # Strategy 3: Find first { and last } and extract
         json_start = response.find("{")
         json_end = response.rfind("}") + 1
         if json_start >= 0 and json_end > json_start:
+            json_text = response[json_start:json_end]
+            # Try parsing directly first
             try:
-                json_text = response[json_start:json_end]
-                json_text = self._fix_json_common_issues(json_text)
                 return json.loads(json_text)
             except json.JSONDecodeError:
-                pass
+                # If direct parsing fails, try fixing common issues
+                try:
+                    json_text = self._fix_json_common_issues(json_text)
+                    return json.loads(json_text)
+                except json.JSONDecodeError as e:
+                    logger.debug("Strategy 3 failed to parse JSON", error=str(e), json_preview=json_text[:200])
         
         # Strategy 4: Try parsing the whole response
         try:
-            json_text = self._fix_json_common_issues(response)
-            return json.loads(json_text)
+            return json.loads(response)
         except json.JSONDecodeError:
-            pass
+            try:
+                json_text = self._fix_json_common_issues(response)
+                return json.loads(json_text)
+            except json.JSONDecodeError as e:
+                logger.debug("Strategy 4 failed to parse JSON", error=str(e))
         
         # Strategy 5: Return raw response as fallback
         logger.warning(
@@ -444,7 +462,7 @@ class ArticleLLMEnricher:
     
     def _fix_json_common_issues(self, json_text: str) -> str:
         """
-        Fix common JSON formatting issues.
+        Fix common JSON formatting issues (conservative approach).
         
         Args:
             json_text: JSON string with potential issues
@@ -459,11 +477,15 @@ class ArticleLLMEnricher:
         json_text = re.sub(r',\s*}', '}', json_text)
         json_text = re.sub(r',\s*]', ']', json_text)
         
-        # Fix single quotes to double quotes for object keys
-        json_text = re.sub(r"'([^']*)':", r'"\1":', json_text)
+        # Fix single quotes to double quotes for object keys only
+        # More precise regex: only match 'key': not values
+        json_text = re.sub(r"'([^']*)':\s*", r'"\1": ', json_text)
         
-        # Fix unquoted keys (word: -> "word":)
-        json_text = re.sub(r'(\w+):', r'"\1":', json_text)
+        # DON'T fix unquoted keys automatically - it breaks valid JSON
+        # The regex r'(\w+):' is too aggressive and breaks values like "word: something"
+        # Only fix if absolutely necessary with a more conservative approach
+        # that only matches keys at the start of a line or after { or ,
+        # For now, we skip this to avoid breaking valid JSON
         
         return json_text
 
