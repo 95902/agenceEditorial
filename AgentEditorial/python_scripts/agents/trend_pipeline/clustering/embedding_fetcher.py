@@ -7,7 +7,7 @@ import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 
-from python_scripts.analysis.clustering.config import ClusteringConfig
+from python_scripts.agents.trend_pipeline.clustering.config import ClusteringConfig
 from python_scripts.config.settings import settings
 from python_scripts.utils.logging import get_logger
 

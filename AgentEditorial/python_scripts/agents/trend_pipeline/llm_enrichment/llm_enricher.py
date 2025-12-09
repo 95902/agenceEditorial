@@ -6,8 +6,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from python_scripts.analysis.llm_enrichment.config import LLMEnrichmentConfig
-from python_scripts.analysis.llm_enrichment.prompts import (
+from python_scripts.agents.trend_pipeline.llm_enrichment.config import LLMEnrichmentConfig
+from python_scripts.agents.trend_pipeline.llm_enrichment.prompts import (
     TREND_SYNTHESIS_PROMPT,
     ANGLE_GENERATION_PROMPT,
     OUTLIER_ANALYSIS_PROMPT,

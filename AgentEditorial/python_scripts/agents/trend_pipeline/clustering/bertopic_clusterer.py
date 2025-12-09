@@ -9,8 +9,8 @@ from bertopic import BERTopic
 from hdbscan import HDBSCAN
 from umap import UMAP
 
-from python_scripts.analysis.clustering.config import ClusteringConfig
-from python_scripts.analysis.clustering.embedding_fetcher import EmbeddingFetcher
+from python_scripts.agents.trend_pipeline.clustering.config import ClusteringConfig
+from python_scripts.agents.trend_pipeline.clustering.embedding_fetcher import EmbeddingFetcher
 from python_scripts.config.settings import settings
 from python_scripts.utils.logging import get_logger
 from python_scripts.vectorstore.embeddings_utils import get_embedding_model

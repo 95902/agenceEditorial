@@ -8,7 +8,7 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.agents.base_agent import BaseAgent
-from python_scripts.analysis.topic_modeling import (
+from python_scripts.agents.trend_pipeline.topic_modeling import (
     analyze_temporal_evolution,
     create_bertopic_model,
     detect_emerging_topics,

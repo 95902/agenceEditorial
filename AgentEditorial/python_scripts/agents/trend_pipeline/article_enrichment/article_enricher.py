@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.analysis.article_enrichment.config import ArticleEnrichmentConfig
-from python_scripts.analysis.article_enrichment.llm_enricher import ArticleLLMEnricher
+from python_scripts.agents.trend_pipeline.article_enrichment.config import ArticleEnrichmentConfig
+from python_scripts.agents.trend_pipeline.article_enrichment.llm_enricher import ArticleLLMEnricher
 from python_scripts.database.crud_profiles import get_client_context_for_enrichment
 from python_scripts.database.models import (
     ArticleRecommendation,

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.analysis.article_enrichment.article_enricher import ArticleEnricher
+from python_scripts.agents.trend_pipeline.article_enrichment.article_enricher import ArticleEnricher
 from python_scripts.api.dependencies import get_db_session as get_db
 from python_scripts.utils.logging import get_logger
 

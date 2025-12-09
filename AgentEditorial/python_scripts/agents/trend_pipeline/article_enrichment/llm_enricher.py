@@ -6,8 +6,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from python_scripts.analysis.article_enrichment.config import ArticleEnrichmentConfig
-from python_scripts.analysis.article_enrichment.prompts import (
+from python_scripts.agents.trend_pipeline.article_enrichment.config import ArticleEnrichmentConfig
+from python_scripts.agents.trend_pipeline.article_enrichment.prompts import (
     COMPLETE_ENRICHMENT_PROMPT,
     HOOK_PERSONALIZATION_PROMPT,
     OUTLINE_ENRICHMENT_PROMPT,

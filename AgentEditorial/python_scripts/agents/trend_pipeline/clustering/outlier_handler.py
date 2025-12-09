@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from python_scripts.analysis.clustering.config import ClusteringConfig
+from python_scripts.agents.trend_pipeline.clustering.config import ClusteringConfig
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)

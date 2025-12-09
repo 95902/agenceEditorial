@@ -8,10 +8,10 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.agents.base_agent import BaseAgent
-from python_scripts.analysis.clustering import BertopicClusterer, ClusteringConfig, EmbeddingFetcher, OutlierHandler, TopicLabeler
-from python_scripts.analysis.temporal import TemporalAnalyzer, TemporalConfig
-from python_scripts.analysis.llm_enrichment import LLMEnricher, LLMEnrichmentConfig
-from python_scripts.analysis.gap_analysis import GapAnalyzer, GapAnalysisConfig
+from python_scripts.agents.trend_pipeline.clustering import BertopicClusterer, ClusteringConfig, EmbeddingFetcher, OutlierHandler, TopicLabeler
+from python_scripts.agents.trend_pipeline.temporal import TemporalAnalyzer, TemporalConfig
+from python_scripts.agents.trend_pipeline.llm_enrichment import LLMEnricher, LLMEnrichmentConfig
+from python_scripts.agents.trend_pipeline.gap_analysis import GapAnalyzer, GapAnalysisConfig
 from python_scripts.database.crud_clusters import (
     create_topic_clusters_batch,
     create_topic_outliers_batch,
