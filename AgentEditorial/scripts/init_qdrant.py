@@ -11,7 +11,7 @@ from python_scripts.utils.logging import setup_logging, get_logger
 from python_scripts.vectorstore.qdrant_client import qdrant_client
 
 COLLECTION_NAME = "competitor_articles"
-VECTOR_SIZE = 384  # all-MiniLM-L6-v2 dimension
+VECTOR_SIZE = 1024  # mxbai-embed-large-v1 dimension
 
 
 def main() -> None:

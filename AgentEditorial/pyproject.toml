@@ -27,6 +27,9 @@ dependencies = [
     "bertopic>=0.16.0",
     "sentence-transformers>=2.2.0",
     "spacy>=3.7.0",
+    "keybert>=0.8.0",
+    "pytextrank>=3.3.0",
+    "gensim>=4.3.0",
     "structlog>=24.1.0",
     "slowapi>=0.1.9",
     "tenacity>=8.2.0",
@@ -131,6 +134,9 @@ module = [
     "sentence_transformers.*",
     "spacy.*",
     "ddgs.*",
+    "keybert.*",
+    "pytextrank.*",
+    "gensim.*",
 ]
 ignore_missing_imports = true
 

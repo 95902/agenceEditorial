@@ -92,6 +92,23 @@ init-qdrant: ## Initialise la collection Qdrant
 	fi
 	@echo "✅ Qdrant initialisé"
 
+index-articles: ## Indexe les articles existants dans Qdrant (usage: make index-articles DOMAIN=example.com)
+	@echo "🔍 Indexation des articles existants dans Qdrant..."
+	@if [ -f "$(VENV_BIN)/python" ]; then \
+		if [ -n "$(DOMAIN)" ]; then \
+			$(VENV_BIN)/python scripts/index_existing_articles.py $(DOMAIN); \
+		else \
+			$(VENV_BIN)/python scripts/index_existing_articles.py; \
+		fi \
+	else \
+		if [ -n "$(DOMAIN)" ]; then \
+			$(UV) run python scripts/index_existing_articles.py $(DOMAIN); \
+		else \
+			$(UV) run python scripts/index_existing_articles.py; \
+		fi \
+	fi
+	@echo "✅ Indexation terminée"
+
 check-deps: ## Vérifie et installe les dépendances manquantes
 	@echo "🔍 Vérification des dépendances..."
 	@uv pip install -e . --quiet || echo "⚠️  Certaines dépendances peuvent être manquantes"

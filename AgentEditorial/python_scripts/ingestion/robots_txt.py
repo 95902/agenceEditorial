@@ -1,12 +1,13 @@
-"""Robots.txt parser and caching."""
+"""Robots.txt parser and caching (T101 - US5)."""
 
 import re
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Suppress SSL warnings for development
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
@@ -129,10 +130,63 @@ async def fetch_robots_txt(domain: str) -> Optional[str]:
         return None
 
 
-async def parse_robots_txt(domain: str) -> Optional[RobotsTxtParser]:
-    """Fetch and parse robots.txt for a domain."""
+async def parse_robots_txt(
+    domain: str,
+    db_session: Optional[AsyncSession] = None,
+    use_cache: bool = True,
+) -> Optional[RobotsTxtParser]:
+    """
+    Fetch and parse robots.txt for a domain with caching (T101 - US5).
+    
+    Args:
+        domain: Domain name
+        db_session: Database session for caching (optional)
+        use_cache: Whether to use cache (default: True)
+        
+    Returns:
+        RobotsTxtParser instance or None
+    """
+    # Check cache if enabled and db_session provided
+    if use_cache and db_session:
+        from python_scripts.database.crud_permissions import get_scraping_permission
+        
+        cached = await get_scraping_permission(db_session, domain)
+        if cached:
+            logger.debug("Using cached robots.txt", domain=domain)
+            # Reconstruct parser from cached data
+            if cached.robots_txt_content:
+                parser = RobotsTxtParser(cached.robots_txt_content, f"https://{domain}")
+                return parser
+    
+    # Fetch fresh robots.txt
     content = await fetch_robots_txt(domain)
-    if content:
-        return RobotsTxtParser(content, f"https://{domain}")
-    return None
+    if not content:
+        return None
+    
+    parser = RobotsTxtParser(content, f"https://{domain}")
+    
+    # Save to cache if db_session provided
+    if db_session:
+        from python_scripts.database.crud_permissions import create_or_update_scraping_permission
+        
+        # Extract disallowed paths
+        disallowed_paths = parser.get_disallowed_paths()
+        crawl_delay = parser.get_crawl_delay()
+        
+        # Determine if scraping is generally allowed
+        # Check a few common paths
+        test_paths = ["/", "/blog/", "/articles/"]
+        scraping_allowed = any(parser.is_allowed(f"https://{domain}{path}") for path in test_paths)
+        
+        await create_or_update_scraping_permission(
+            db_session,
+            domain=domain,
+            scraping_allowed=scraping_allowed,
+            disallowed_paths=disallowed_paths,
+            crawl_delay=crawl_delay,
+            robots_txt_content=content,
+        )
+        logger.info("Robots.txt cached", domain=domain)
+    
+    return parser
 

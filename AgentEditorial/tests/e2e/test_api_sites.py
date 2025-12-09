@@ -166,4 +166,135 @@ class TestSiteAnalysisAPI:
             # In a real scenario, we'd wait for completion
             assert execution is not None or True  # Allow for async nature
 
+    async def test_list_sites_endpoint(self, client: AsyncClient, db_session) -> None:
+        """Test GET /api/v1/sites endpoint (T067 - US2)."""
+        # Create some test profiles
+        from python_scripts.database.crud_profiles import create_site_profile
+
+        await create_site_profile(
+            db_session,
+            domain="test-site1.com",
+            language_level="intermediate",
+        )
+        await create_site_profile(
+            db_session,
+            domain="test-site2.com",
+            language_level="advanced",
+        )
+        await db_session.commit()
+
+        # Test listing sites
+        response = await client.get("/api/v1/sites")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "sites" in data
+        assert "total" in data
+        assert isinstance(data["sites"], list)
+        assert data["total"] >= 2
+
+        # Verify structure
+        if len(data["sites"]) > 0:
+            site = data["sites"][0]
+            assert "domain" in site
+            assert "analysis_date" in site
+
+    async def test_get_site_history_endpoint(self, client: AsyncClient, db_session) -> None:
+        """Test GET /api/v1/sites/{domain}/history endpoint (T067 - US2)."""
+        from datetime import datetime, timezone
+
+        from python_scripts.database.crud_profiles import create_site_profile
+
+        domain = "history-test.com"
+        base_time = datetime.now(timezone.utc)
+
+        # Create multiple historical profiles
+        await create_site_profile(
+            db_session,
+            domain=domain,
+            language_level="beginner",
+            pages_analyzed=5,
+            analysis_date=base_time.replace(day=1),
+        )
+        await create_site_profile(
+            db_session,
+            domain=domain,
+            language_level="intermediate",
+            pages_analyzed=10,
+            analysis_date=base_time.replace(day=2),
+        )
+        await create_site_profile(
+            db_session,
+            domain=domain,
+            language_level="advanced",
+            pages_analyzed=15,
+            analysis_date=base_time.replace(day=3),
+        )
+        await db_session.commit()
+
+        # Test getting history
+        response = await client.get(f"/api/v1/sites/{domain}/history")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify structure
+        assert "domain" in data
+        assert data["domain"] == domain
+        assert "total_analyses" in data
+        assert "history" in data
+        assert isinstance(data["history"], list)
+        assert len(data["history"]) == 3
+
+        # Verify history entries are ordered (newest first)
+        history = data["history"]
+        assert history[0]["pages_analyzed"] == 15  # Most recent
+        assert history[1]["pages_analyzed"] == 10
+        assert history[2]["pages_analyzed"] == 5  # Oldest
+
+        # Verify metric comparisons exist
+        if "metric_comparisons" in data and data["metric_comparisons"]:
+            comparisons = data["metric_comparisons"]
+            assert isinstance(comparisons, list)
+            if len(comparisons) > 0:
+                comparison = comparisons[0]
+                assert "metric_name" in comparison
+                assert "current_value" in comparison
+
+    async def test_get_site_history_not_found(self, client: AsyncClient) -> None:
+        """Test getting history for non-existent domain (T067 - US2)."""
+        response = await client.get("/api/v1/sites/nonexistent-domain.com/history")
+        assert response.status_code == 404
+        data = response.json()
+        assert "detail" in data
+
+    async def test_get_site_history_limit_parameter(self, client: AsyncClient, db_session) -> None:
+        """Test GET /api/v1/sites/{domain}/history with limit parameter (T067 - US2)."""
+        from datetime import datetime, timezone
+
+        from python_scripts.database.crud_profiles import create_site_profile
+
+        domain = "limit-test.com"
+        base_time = datetime.now(timezone.utc)
+
+        # Create 5 historical profiles
+        for i in range(5):
+            await create_site_profile(
+                db_session,
+                domain=domain,
+                language_level=f"level{i}",
+                pages_analyzed=10 + i,
+                analysis_date=base_time.replace(day=1 + i),
+            )
+        await db_session.commit()
+
+        # Test with limit
+        response = await client.get(f"/api/v1/sites/{domain}/history?limit=2")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Should return only 2 most recent entries
+        assert len(data["history"]) == 2
+        assert data["history"][0]["pages_analyzed"] == 14  # Most recent
+        assert data["history"][1]["pages_analyzed"] == 13
+
 

@@ -272,6 +272,10 @@ class CompetitorSearchAgent(BaseAgent):
     ) -> List[Dict[str, Any]]:
         """
         Search for competitors using optimized 12-step pipeline.
+        
+        ⚠️ MÉTHODE INTERNE - Ne pas utiliser directement pour sauvegarder dans la DB.
+        Utiliser `execute()` pour obtenir toutes les métadonnées complètes (total_found, 
+        total_evaluated, all_candidates, excluded_candidates).
 
         Args:
             domain: Domain to find competitors for
@@ -279,7 +283,8 @@ class CompetitorSearchAgent(BaseAgent):
             db_session: Optional database session for enrichment
 
         Returns:
-            List of competitor dictionaries with scores
+            List of all evaluated candidate dictionaries (included + excluded) with scores.
+            Chaque candidat a un champ "included" (bool) indiquant s'il est inclus ou exclu.
         """
         pipeline_start_time = time.time()
         try:
@@ -748,6 +753,10 @@ class CompetitorSearchAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """
         Execute competitor search workflow.
+        
+        ✅ MÉTHODE PUBLIQUE - Utiliser cette méthode pour obtenir toutes les métadonnées complètes.
+        Cette méthode appelle `search_competitors()` en interne et enrichit les résultats avec
+        toutes les métadonnées nécessaires pour la sauvegarde en base de données.
 
         Args:
             execution_id: Execution ID (UUID)
@@ -756,7 +765,13 @@ class CompetitorSearchAgent(BaseAgent):
             **kwargs: Additional arguments
 
         Returns:
-            Competitor search results
+            Dict complet contenant :
+            - competitors: Liste des concurrents inclus (included=True)
+            - all_candidates: Tous les candidats évalués (inclus + exclus)
+            - excluded_candidates: Liste des candidats exclus uniquement
+            - total_found: Nombre de concurrents inclus
+            - total_evaluated: Nombre total de candidats évalués
+            - domain: Domaine analysé
         """
         domain = input_data.get("domain", "")
         max_competitors = input_data.get("max_competitors", 10)
