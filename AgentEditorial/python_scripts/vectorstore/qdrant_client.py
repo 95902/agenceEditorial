@@ -20,10 +20,48 @@ logger = get_logger(__name__)
 
 # Collection name for competitor articles
 COLLECTION_NAME = "competitor_articles"
-# Collection name for client articles
+# Collection name for client articles (legacy, use get_client_collection_name instead)
 CLIENT_COLLECTION_NAME = "client_articles"
 # Similarity threshold for duplicate detection (0.92 = 92% similarity)
 DUPLICATE_THRESHOLD = 0.92
+
+
+def get_client_collection_name(domain: str) -> str:
+    """
+    Generate Qdrant collection name for client articles based on domain.
+    
+    Format: {domain}_client_articles
+    
+    Args:
+        domain: Domain name (e.g., "example.com")
+        
+    Returns:
+        Collection name (e.g., "example_com_client_articles")
+    """
+    # Normalize domain: replace dots with underscores, lowercase, remove invalid chars
+    normalized_domain = domain.lower().replace(".", "_").replace("-", "_")
+    # Remove any other invalid characters for collection names
+    normalized_domain = "".join(c for c in normalized_domain if c.isalnum() or c == "_")
+    return f"{normalized_domain}_client_articles"
+
+
+def get_competitor_collection_name(client_domain: str) -> str:
+    """
+    Generate Qdrant collection name for competitor articles based on client domain.
+    
+    Format: {client_domain}_competitor_articles
+    
+    Args:
+        client_domain: Client domain name (e.g., "innosys.fr")
+        
+    Returns:
+        Collection name (e.g., "innosys_fr_competitor_articles")
+    """
+    # Normalize domain: replace dots with underscores, lowercase, remove invalid chars
+    normalized_domain = client_domain.lower().replace(".", "_").replace("-", "_")
+    # Remove any other invalid characters for collection names
+    normalized_domain = "".join(c for c in normalized_domain if c.isalnum() or c == "_")
+    return f"{normalized_domain}_competitor_articles"
 
 
 class QdrantClientWrapper:
