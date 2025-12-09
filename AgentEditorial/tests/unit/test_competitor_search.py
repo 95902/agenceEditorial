@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from python_scripts.agents.agent_competitor import CompetitorSearchAgent
+from python_scripts.agents.competitor.agent import CompetitorSearchAgent
 
 
 @pytest.mark.unit
@@ -142,7 +142,7 @@ class TestCompetitorSearchSources:
         mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
         mock_ddgs.__exit__ = MagicMock(return_value=None)
 
-        with patch("python_scripts.agents.agent_competitor.DDGS", return_value=mock_ddgs):
+        with patch("python_scripts.agents.competitor.agent.DDGS", return_value=mock_ddgs):
             results = await agent._search_duckduckgo("ESN Paris")
 
         assert len(results) >= 2
@@ -175,7 +175,7 @@ class TestCompetitorSearchSources:
         mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
         mock_ddgs.__exit__ = MagicMock(return_value=None)
 
-        with patch("python_scripts.agents.agent_competitor.DDGS", return_value=mock_ddgs):
+        with patch("python_scripts.agents.competitor.agent.DDGS", return_value=mock_ddgs):
             results = await agent._search_duckduckgo("ESN")
 
         # Should only include .fr domains
@@ -190,7 +190,7 @@ class TestCompetitorSearchSources:
         mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
         mock_ddgs.__exit__ = MagicMock(return_value=None)
 
-        with patch("python_scripts.agents.agent_competitor.DDGS", return_value=mock_ddgs):
+        with patch("python_scripts.agents.competitor.agent.DDGS", return_value=mock_ddgs):
             results = await agent._search_duckduckgo("ESN Paris")
 
         assert results == []
@@ -202,7 +202,7 @@ class TestCompetitorSearchSources:
         mock_ddgs.__enter__ = MagicMock(return_value=mock_ddgs)
         mock_ddgs.__exit__ = MagicMock(return_value=None)
 
-        with patch("python_scripts.agents.agent_competitor.DDGS", return_value=mock_ddgs):
+        with patch("python_scripts.agents.competitor.agent.DDGS", return_value=mock_ddgs):
             results = await agent._search_duckduckgo("ESN Paris")
 
         # Should return empty list on error

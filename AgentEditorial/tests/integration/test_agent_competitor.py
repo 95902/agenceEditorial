@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.agents.agent_competitor import CompetitorSearchAgent
+from python_scripts.agents.competitor.agent import CompetitorSearchAgent
 from python_scripts.database.db_session import AsyncSessionLocal
 from python_scripts.database.crud_profiles import create_site_profile
 

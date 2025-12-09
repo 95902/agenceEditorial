@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.agents.agent_competitor import CompetitorSearchAgent
+from python_scripts.agents.competitor.agent import CompetitorSearchAgent
 from python_scripts.api.dependencies import get_db_session as get_db
 from python_scripts.api.schemas.requests import (
     CompetitorSearchRequest,
@@ -74,25 +74,10 @@ async def run_competitor_search_background(
                 max_competitors=max_competitors,
                 execution_id=execution_id,
             )
+            
+            # The orchestrator already saves complete output_data via execute()
+            # Just get the results for logging
             results = workflow_result.get("competitors", [])
-
-            # Get execution again (in case it was updated by orchestrator)
-            execution = await get_workflow_execution(db_session, execution_id)
-            if execution:
-                # Store results in execution output_data
-                output_data = {
-                    "competitors": results,
-                    "total_found": len(results),
-                    "domain": domain,
-                }
-
-                # Update execution with results
-                await update_workflow_execution(
-                    db_session,
-                    execution,
-                    status="completed",
-                    output_data=output_data,
-                )
 
             logger.info(
                 "Competitor search completed",

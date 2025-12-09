@@ -48,6 +48,10 @@ def make_json_serializable(obj: Any) -> Any:
                 return None
             elif obj != obj:  # NaN check
                 return None
+            return obj  # Return float as-is if valid
+        else:
+            # int: return as-is (already JSON-serializable)
+            return obj
     elif isinstance(obj, dict):
         return {key: make_json_serializable(value) for key, value in obj.items()}
     elif isinstance(obj, (list, tuple)):

@@ -181,6 +181,7 @@ class TrendPipelineAgent(BaseAgent):
                 await self.db_session.commit()
                 
                 stage3_result = await self._execute_stage_3_llm(
+                    analysis_id=execution.id,
                     clusters=stage1_result["clusters"],
                     temporal_metrics=stage2_result.get("metrics", []),
                     outliers=stage1_result.get("outliers", []),
@@ -202,6 +203,7 @@ class TrendPipelineAgent(BaseAgent):
                 await self.db_session.commit()
                 
                 stage4_result = await self._execute_stage_4_gap_analysis(
+                    analysis_id=execution.id,
                     client_domain=client_domain,
                     clusters=stage1_result["clusters"],
                     documents=stage1_result.get("documents", []),
@@ -368,12 +370,19 @@ class TrendPipelineAgent(BaseAgent):
     
     async def _execute_stage_3_llm(
         self,
+        analysis_id: int,
         clusters: List[Dict[str, Any]],
         temporal_metrics: List[Dict[str, Any]],
         outliers: List[Dict[str, Any]],
         texts: List[str],
     ) -> Dict[str, Any]:
         """Execute Stage 3: LLM Enrichment."""
+        from python_scripts.database.crud_llm_results import (
+            create_trend_analysis,
+            create_article_recommendation,
+        )
+        from python_scripts.database.crud_clusters import get_topic_cluster_by_topic_id
+        
         # Build temporal lookup
         temporal_lookup = {m["topic_id"]: m for m in temporal_metrics}
         
@@ -393,6 +402,16 @@ class TrendPipelineAgent(BaseAgent):
             # Find cluster
             cluster = next((c for c in clusters if c["topic_id"] == topic_id), None)
             if not cluster:
+                continue
+            
+            # Get database cluster record
+            db_cluster = await get_topic_cluster_by_topic_id(
+                self.db_session,
+                analysis_id,
+                topic_id,
+            )
+            if not db_cluster:
+                logger.warning(f"Database cluster not found for topic {topic_id}, analysis_id={analysis_id}")
                 continue
             
             # Extract keywords
@@ -418,6 +437,19 @@ class TrendPipelineAgent(BaseAgent):
                 synthesis["topic_id"] = topic_id
                 syntheses.append(synthesis)
                 
+                # Save trend analysis to database
+                try:
+                    await create_trend_analysis(
+                        db_session=self.db_session,
+                        topic_cluster_id=db_cluster.id,
+                        synthesis=synthesis.get("synthesis", ""),
+                        saturated_angles=synthesis.get("saturated_angles"),
+                        opportunities=synthesis.get("opportunities"),
+                        llm_model_used=synthesis.get("llm_model_used", "unknown"),
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save trend analysis for topic {topic_id}", error=str(e))
+                
                 # Generate article angles
                 angles = await self._llm_enricher.generate_article_angles(
                     topic_label=cluster["label"],
@@ -430,6 +462,20 @@ class TrendPipelineAgent(BaseAgent):
                 for angle in angles:
                     angle["topic_cluster_id"] = topic_id
                     recommendations.append(angle)
+                    
+                    # Save article recommendation to database
+                    try:
+                        await create_article_recommendation(
+                            db_session=self.db_session,
+                            topic_cluster_id=db_cluster.id,
+                            title=angle.get("title", ""),
+                            hook=angle.get("hook", ""),
+                            outline=angle.get("outline", {}),
+                            effort_level=angle.get("effort_level", "medium"),
+                            differentiation_score=angle.get("differentiation_score"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to save article recommendation for topic {topic_id}", error=str(e))
                     
             except Exception as e:
                 logger.warning(f"LLM enrichment failed for topic {topic_id}", error=str(e))
@@ -454,6 +500,7 @@ class TrendPipelineAgent(BaseAgent):
     
     async def _execute_stage_4_gap_analysis(
         self,
+        analysis_id: int,
         client_domain: str,
         clusters: List[Dict[str, Any]],
         documents: List[Dict[str, Any]],
@@ -462,6 +509,13 @@ class TrendPipelineAgent(BaseAgent):
         recommendations: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Execute Stage 4: Gap Analysis."""
+        from python_scripts.database.crud_gaps import (
+            create_editorial_gap,
+            create_content_roadmap_item,
+        )
+        from python_scripts.database.crud_clusters import get_topic_cluster_by_topic_id
+        from python_scripts.database.crud_llm_results import get_article_recommendations_by_topic_cluster
+        
         # Group documents by topic
         documents_by_topic = {}
         for doc, topic_id in zip(documents, topics):
@@ -484,6 +538,36 @@ class TrendPipelineAgent(BaseAgent):
             temporal_metrics=temporal_metrics,
         )
         
+        # Save gaps to database
+        gap_id_map = {}  # Map topic_id -> gap_id
+        for gap_data in gaps:
+            topic_id = gap_data["topic_id"]
+            
+            # Get database cluster record
+            db_cluster = await get_topic_cluster_by_topic_id(
+                self.db_session,
+                analysis_id,
+                topic_id,
+            )
+            if not db_cluster:
+                logger.warning(f"Database cluster not found for topic {topic_id} in gap analysis")
+                continue
+            
+            try:
+                gap = await create_editorial_gap(
+                    db_session=self.db_session,
+                    client_domain=client_domain,
+                    topic_cluster_id=db_cluster.id,
+                    coverage_score=gap_data["coverage_score"],
+                    priority_score=gap_data["priority_score"],
+                    diagnostic=gap_data["diagnostic"],
+                    opportunity_description=gap_data["opportunity_description"],
+                    risk_assessment=gap_data["risk_assessment"],
+                )
+                gap_id_map[topic_id] = gap.id
+            except Exception as e:
+                logger.warning(f"Failed to save gap for topic {topic_id}", error=str(e))
+        
         # Identify strengths
         strengths = self._gap_analyzer.identify_strengths(coverage)
         
@@ -492,6 +576,56 @@ class TrendPipelineAgent(BaseAgent):
             gaps=gaps,
             recommendations=recommendations,
         )
+        
+        # Save roadmap to database
+        for roadmap_item in roadmap:
+            gap_topic_id = roadmap_item.get("gap_id")  # This is topic_id from gap
+            recommendation_title = roadmap_item.get("recommendation_title", "")
+            
+            if gap_topic_id not in gap_id_map:
+                continue
+            
+            gap_id = gap_id_map[gap_topic_id]
+            
+            # Find matching article recommendation
+            db_cluster = await get_topic_cluster_by_topic_id(
+                self.db_session,
+                analysis_id,
+                gap_topic_id,
+            )
+            if not db_cluster:
+                continue
+            
+            # Get article recommendations for this topic
+            article_recos = await get_article_recommendations_by_topic_cluster(
+                self.db_session,
+                db_cluster.id,
+            )
+            
+            # Find matching recommendation by title
+            matching_reco = None
+            for reco in article_recos:
+                if reco.title == recommendation_title or recommendation_title in reco.title:
+                    matching_reco = reco
+                    break
+            
+            # If no exact match, use first recommendation
+            if not matching_reco and article_recos:
+                matching_reco = article_recos[0]
+            
+            if matching_reco:
+                try:
+                    await create_content_roadmap_item(
+                        db_session=self.db_session,
+                        client_domain=client_domain,
+                        gap_id=gap_id,
+                        recommendation_id=matching_reco.id,
+                        priority_order=roadmap_item.get("priority_order", 999),
+                        estimated_effort=roadmap_item.get("estimated_effort", "medium"),
+                        status="pending",  # Roadmap items start as pending
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to save roadmap item for topic {gap_topic_id}", error=str(e))
         
         return {
             "success": True,

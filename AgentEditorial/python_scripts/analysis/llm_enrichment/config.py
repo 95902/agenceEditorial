@@ -10,13 +10,13 @@ class LLMEnrichmentConfig:
     
     # Model mapping by task
     models: Dict[str, str] = field(default_factory=lambda: {
-        "trend_synthesis": "llama3:70b",
-        "angle_generation": "mistral:7b",
-        "outlier_analysis": "llama3:8b",
+            "trend_synthesis": "phi3:medium",
+            "angle_generation": "mistral:7b",
+            "outlier_analysis": "llama3:8b",
     })
     
     # Fallback model if primary not available
-    fallback_model: str = "llama3:8b"
+    fallback_model: str = "mistral:7b"
     
     # Timeouts
     synthesis_timeout_seconds: int = 120

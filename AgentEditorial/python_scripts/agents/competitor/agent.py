@@ -797,3 +797,5 @@ class CompetitorSearchAgent(BaseAgent):
             "total_evaluated": len(all_candidates),
             "domain": domain,
         }
+
+

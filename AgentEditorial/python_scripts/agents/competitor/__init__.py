@@ -1,5 +1,6 @@
 """Competitor search agent modules."""
 
+from python_scripts.agents.competitor.agent import CompetitorSearchAgent
 from python_scripts.agents.competitor.classifiers import (
     BusinessTypeClassifier,
     ESNClassifier,
@@ -18,6 +19,7 @@ from python_scripts.agents.competitor.query_generator import QueryGenerator
 from python_scripts.agents.competitor.scorer import CompetitorScorer
 
 __all__ = [
+    "CompetitorSearchAgent",
     "CompetitorSearchConfig",
     "QueryGenerator",
     "PreFilter",

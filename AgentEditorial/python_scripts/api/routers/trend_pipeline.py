@@ -124,6 +124,37 @@ class RoadmapResponse(BaseModel):
     total: int
 
 
+class TrendSynthesisSummary(BaseModel):
+    """Summary of a trend synthesis."""
+    topic_id: int
+    topic_label: str
+    synthesis: str
+    saturated_angles: Optional[List[str]] = None
+    opportunities: Optional[List[str]] = None
+    llm_model_used: str
+
+
+class ArticleRecommendationSummary(BaseModel):
+    """Summary of an article recommendation."""
+    id: int
+    topic_id: int
+    topic_label: str
+    title: str
+    hook: str
+    outline: dict  # Can be a dict or list converted to dict
+    effort_level: str
+    differentiation_score: Optional[float] = None
+
+
+class LLMResultsResponse(BaseModel):
+    """Response schema for LLM results."""
+    execution_id: str
+    syntheses: List[TrendSynthesisSummary]
+    recommendations: List[ArticleRecommendationSummary]
+    total_syntheses: int
+    total_recommendations: int
+
+
 # ============================================================
 # Background task
 # ============================================================
@@ -138,10 +169,76 @@ async def run_trend_pipeline_task(
         
         # Determine domains
         domains = request.domains or []
+        
+        # Mode: Fetch validated competitors from client_domain
         if request.client_domain and not domains:
-            # Fetch competitor domains for client
-            # For now, use client domain
-            domains = [request.client_domain]
+            from sqlalchemy import select, desc
+            from python_scripts.database.models import WorkflowExecution
+            
+            # Find latest completed competitor search for this domain
+            stmt = (
+                select(WorkflowExecution)
+                .where(
+                    WorkflowExecution.workflow_type == "competitor_search",
+                    WorkflowExecution.status == "completed",
+                    WorkflowExecution.input_data["domain"].astext == request.client_domain,
+                )
+                .order_by(desc(WorkflowExecution.start_time))
+                .limit(1)
+            )
+            
+            result = await db.execute(stmt)
+            execution = result.scalar_one_or_none()
+            
+            if not execution or not execution.output_data:
+                logger.error(
+                    "No competitor search results found",
+                    client_domain=request.client_domain,
+                )
+                raise ValueError(
+                    f"No competitor search results found for domain: {request.client_domain}. "
+                    "Please run competitor search first."
+                )
+            
+            # Extract validated competitors
+            competitors_data = execution.output_data.get("competitors", [])
+            if not competitors_data:
+                logger.error(
+                    "No validated competitors found",
+                    client_domain=request.client_domain,
+                )
+                raise ValueError(
+                    f"No validated competitors found for domain: {request.client_domain}"
+                )
+            
+            # Extract domains from validated competitors
+            for comp in competitors_data:
+                validation_status = comp.get("validation_status", "validated")
+                validated = comp.get("validated", False)
+                excluded = comp.get("excluded", False)
+                
+                # Include only validated or manual competitors (not excluded)
+                if not excluded and (validation_status in ["validated", "manual"] or validated):
+                    domain = comp.get("domain")
+                    if domain:
+                        domains.append(domain)
+            
+            if not domains:
+                logger.error(
+                    "No validated competitors to analyze",
+                    client_domain=request.client_domain,
+                )
+                raise ValueError(
+                    f"No validated competitors found for domain: {request.client_domain}. "
+                    "Please validate competitors first."
+                )
+            
+            logger.info(
+                "Fetched validated competitors",
+                client_domain=request.client_domain,
+                competitor_count=len(domains),
+                domains=domains[:10],  # Log first 10
+            )
         
         await agent.execute(
             domains=domains,
@@ -153,6 +250,7 @@ async def run_trend_pipeline_task(
         
     except Exception as e:
         logger.error("Trend pipeline task failed", error=str(e))
+        raise
 
 
 # ============================================================
@@ -405,5 +503,101 @@ async def get_pipeline_roadmap(
         execution_id=execution_id,
         roadmap=roadmap_items,
         total=len(roadmap_items),
+    )
+
+
+@router.get(
+    "/{execution_id}/llm-results",
+    response_model=LLMResultsResponse,
+    summary="Get LLM enrichment results",
+    description="Get trend syntheses and article recommendations generated by LLM",
+)
+async def get_pipeline_llm_results(
+    execution_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> LLMResultsResponse:
+    """Get LLM enrichment results from a pipeline execution."""
+    from sqlalchemy import select
+    from python_scripts.database.models import (
+        TrendPipelineExecution, TrendAnalysis, ArticleRecommendation, TopicCluster
+    )
+    from python_scripts.database.crud_llm_results import (
+        get_trend_analyses_by_analysis,
+        get_article_recommendations_by_analysis,
+    )
+    
+    # Get execution
+    result = await db.execute(
+        select(TrendPipelineExecution).where(
+            TrendPipelineExecution.execution_id == execution_id
+        )
+    )
+    execution = result.scalar_one_or_none()
+    
+    if not execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution {execution_id} not found",
+        )
+    
+    # Get trend analyses
+    trend_analyses = await get_trend_analyses_by_analysis(db, execution.id)
+    
+    # Get article recommendations
+    article_recommendations = await get_article_recommendations_by_analysis(db, execution.id)
+    
+    # Build syntheses summaries
+    syntheses = []
+    for ta in trend_analyses:
+        # Get topic cluster for label
+        cluster_result = await db.execute(
+            select(TopicCluster).where(TopicCluster.id == ta.topic_cluster_id)
+        )
+        cluster = cluster_result.scalar_one_or_none()
+        
+        syntheses.append(TrendSynthesisSummary(
+            topic_id=cluster.topic_id if cluster else -1,
+            topic_label=cluster.label if cluster else "Unknown",
+            synthesis=ta.synthesis,
+            saturated_angles=ta.saturated_angles if isinstance(ta.saturated_angles, list) else None,
+            opportunities=ta.opportunities if isinstance(ta.opportunities, list) else None,
+            llm_model_used=ta.llm_model_used,
+        ))
+    
+    # Build recommendations summaries
+    recommendations = []
+    for ar in article_recommendations:
+        # Get topic cluster for label
+        cluster_result = await db.execute(
+            select(TopicCluster).where(TopicCluster.id == ar.topic_cluster_id)
+        )
+        cluster = cluster_result.scalar_one_or_none()
+        
+        # Normalize outline: convert list to dict if needed
+        outline = ar.outline
+        if isinstance(outline, list):
+            # Convert list to dict with numbered keys
+            outline = {f"section_{i+1}": item for i, item in enumerate(outline)}
+        elif not isinstance(outline, dict):
+            # Fallback: wrap in dict
+            outline = {"content": outline}
+        
+        recommendations.append(ArticleRecommendationSummary(
+            id=ar.id,
+            topic_id=cluster.topic_id if cluster else -1,
+            topic_label=cluster.label if cluster else "Unknown",
+            title=ar.title,
+            hook=ar.hook,
+            outline=outline,
+            effort_level=ar.effort_level,
+            differentiation_score=float(ar.differentiation_score) if ar.differentiation_score else None,
+        ))
+    
+    return LLMResultsResponse(
+        execution_id=execution_id,
+        syntheses=syntheses,
+        recommendations=recommendations,
+        total_syntheses=len(syntheses),
+        total_recommendations=len(recommendations),
     )
 

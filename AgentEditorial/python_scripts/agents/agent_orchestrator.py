@@ -6,8 +6,8 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.agents.agent_analysis import EditorialAnalysisAgent
-from python_scripts.agents.agent_competitor import CompetitorSearchAgent
+from python_scripts.agents.agent_analyse_client import EditorialAnalysisAgent
+from python_scripts.agents.competitor.agent import CompetitorSearchAgent
 from python_scripts.agents.agent_scraping import ScrapingAgent
 from python_scripts.agents.agent_topic_modeling import TopicModelingAgent
 from python_scripts.database.crud_executions import (
@@ -273,25 +273,26 @@ class EditorialAnalysisOrchestrator:
             )
             self.logger.info("Competitor search started", execution_id=str(execution_id), domain=domain)
 
-            # Run competitor search
-            results = await self.competitor_agent.search_competitors(
-                domain=domain,
-                max_competitors=max_competitors,
+            # Run competitor search using execute() to get complete data
+            complete_results = await self.competitor_agent.execute(
+                execution_id=execution_id,
+                input_data={
+                    "domain": domain,
+                    "max_competitors": max_competitors,
+                },
                 db_session=self.db_session,
             )
 
-            # Update execution with results
+            # Update execution with complete results
             await update_workflow_execution(
                 self.db_session,
                 execution,
                 status="completed",
-                output_data={
-                    "competitors": results,
-                    "total_found": len(results),
-                    "domain": domain,
-                },
+                output_data=complete_results,  # Contains competitors, all_candidates, excluded_candidates, total_found, total_evaluated, domain
                 was_success=True,
             )
+            
+            results = complete_results.get("competitors", [])
 
             self.logger.info(
                 "Competitor search completed",
@@ -303,8 +304,7 @@ class EditorialAnalysisOrchestrator:
             return {
                 "execution_id": str(execution_id),
                 "status": "completed",
-                "competitors": results,
-                "total_found": len(results),
+                **complete_results,  # Include all fields: competitors, all_candidates, excluded_candidates, total_found, total_evaluated, domain
             }
 
         except Exception as e:

@@ -32,7 +32,7 @@ from python_scripts.ingestion.crawl_pages import (
 from python_scripts.ingestion.detect_sitemaps import get_sitemap_urls
 from python_scripts.ingestion.robots_txt import parse_robots_txt
 from python_scripts.utils.logging import get_logger
-from python_scripts.vectorstore.qdrant_client import qdrant_client, CLIENT_COLLECTION_NAME, COLLECTION_NAME
+from python_scripts.vectorstore.qdrant_client import qdrant_client, COLLECTION_NAME
 
 logger = get_logger(__name__)
 
@@ -913,7 +913,11 @@ class ScrapingAgent(BaseAgent):
                 # Index in Qdrant (T111 - US6)
                 try:
                     # Use client collection if this is a client site, otherwise competitor collection
-                    collection_name = CLIENT_COLLECTION_NAME if is_client_site else COLLECTION_NAME
+                    if is_client_site:
+                        from python_scripts.vectorstore.qdrant_client import get_client_collection_name
+                        collection_name = get_client_collection_name(domain)
+                    else:
+                        collection_name = COLLECTION_NAME
                     qdrant_point_id = qdrant_client.index_article(
                         article_id=article.id,
                         domain=domain,

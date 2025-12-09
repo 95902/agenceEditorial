@@ -491,3 +491,5 @@ class EditorialAnalysisAgent(BaseAgent):
             self.log_step("analysis_failed", "failed", f"Analysis failed: {e}")
             raise
 
+
+

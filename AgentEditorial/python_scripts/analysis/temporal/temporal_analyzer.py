@@ -55,8 +55,15 @@ class TemporalAnalyzer:
                 if isinstance(ts, str):
                     try:
                         ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        # Ensure timezone-aware (fromisoformat can create naive datetime)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
+                elif isinstance(ts, datetime):
+                    # Ensure timezone-aware (assume UTC if naive)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                 timestamps.append(ts)
         
         if not timestamps:
@@ -210,8 +217,15 @@ class TemporalAnalyzer:
                 if isinstance(ts, str):
                     try:
                         ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        # Ensure timezone-aware (fromisoformat can create naive datetime)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
+                elif isinstance(ts, datetime):
+                    # Ensure timezone-aware (assume UTC if naive)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                 timestamps.append(ts)
         
         if not timestamps:
@@ -355,8 +369,15 @@ class TemporalAnalyzer:
                 if isinstance(ts, str):
                     try:
                         ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        # Ensure timezone-aware (fromisoformat can create naive datetime)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
+                elif isinstance(ts, datetime):
+                    # Ensure timezone-aware (assume UTC if naive)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
                 
                 if ts >= cutoff_7d:
                     recent_indices.append(idx)

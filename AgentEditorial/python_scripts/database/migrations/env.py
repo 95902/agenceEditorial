@@ -17,11 +17,15 @@ from python_scripts.database.models import (  # noqa: F401
     ClientArticle,
     CompetitorArticle,
     CrawlCache,
+    DiscoveryLog,
     EditorialTrend,
+    ErrorLog,
     PerformanceMetric,
     ScrapingPermission,
     SiteAnalysisResult,
+    SiteDiscoveryProfile,
     SiteProfile,
+    UrlDiscoveryScore,
     WorkflowExecution,
 )
 

@@ -18,7 +18,9 @@ TREND_SYNTHESIS_PROMPT = """Tu es un analyste éditorial expert. Analyse cette t
 2. Identifie les angles saturés (déjà beaucoup traités)
 3. Suggère des opportunités éditoriales (angles peu exploités)
 
-**FORMAT DE RÉPONSE (JSON):**
+**FORMAT DE RÉPONSE (JSON STRICT OBLIGATOIRE):**
+IMPORTANT: Réponds UNIQUEMENT avec du JSON valide, sans texte avant ou après. Utilise des guillemets doubles pour toutes les chaînes.
+
 ```json
 {{
   "synthesis": "...",
@@ -27,6 +29,8 @@ TREND_SYNTHESIS_PROMPT = """Tu es un analyste éditorial expert. Analyse cette t
   "editorial_potential": "high|medium|low"
 }}
 ```
+
+Réponds uniquement avec le JSON ci-dessus, sans commentaires ni explications.
 """
 
 # Prompt 2: Article Angle Generation (Editor-in-Chief)
@@ -48,7 +52,9 @@ Génère {num_angles} propositions d'articles avec:
 4. Un niveau d'effort estimé (easy/medium/complex)
 5. Un score de différenciation (0-1)
 
-**FORMAT DE RÉPONSE (JSON):**
+**FORMAT DE RÉPONSE (JSON STRICT OBLIGATOIRE):**
+IMPORTANT: Réponds UNIQUEMENT avec du JSON valide, sans texte avant ou après. Utilise des guillemets doubles pour toutes les chaînes.
+
 ```json
 {{
   "articles": [
@@ -62,6 +68,8 @@ Génère {num_angles} propositions d'articles avec:
   ]
 }}
 ```
+
+Réponds uniquement avec le JSON ci-dessus, sans commentaires ni explications.
 """
 
 # Prompt 3: Outlier Analysis (Strategic Monitor)
@@ -82,7 +90,9 @@ Ces documents n'ont pas été classés dans les topics principaux. Ils peuvent r
 3. Évalue le potentiel de disruption (0-1)
 4. Recommande une action: "early_adopter" (agir maintenant) ou "wait" (surveiller)
 
-**FORMAT DE RÉPONSE (JSON):**
+**FORMAT DE RÉPONSE (JSON STRICT OBLIGATOIRE):**
+IMPORTANT: Réponds UNIQUEMENT avec du JSON valide, sans texte avant ou après. Utilise des guillemets doubles pour toutes les chaînes.
+
 ```json
 {{
   "common_thread": "...",
@@ -92,5 +102,7 @@ Ces documents n'ont pas été classés dans les topics principaux. Ils peuvent r
   "justification": "..."
 }}
 ```
+
+Réponds uniquement avec le JSON ci-dessus, sans commentaires ni explications.
 """
 
