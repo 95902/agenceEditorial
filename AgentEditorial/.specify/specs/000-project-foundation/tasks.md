@@ -381,27 +381,27 @@
 
 ### Tests for User Story 9
 
--  T142 [P] [US9] Create E2E test for all API endpoints in tests/e2e/test_api_complete.py
--  T143 [P] [US9] Create WebSocket test for progress streaming in tests/e2e/test_websocket_progress.py
+- [x] T142 [P] [US9] Create E2E test for all API endpoints in tests/e2e/test_api_complete.py
+- [x] T143 [P] [US9] Create WebSocket test for progress streaming in tests/e2e/test_websocket_progress.py
 
 ### Implementation for User Story 9
 
 #### Execution Tracking
 
--  T144 [US9] Implement GET /api/v1/executions/{execution_id} endpoint in python_scripts/api/routers/executions.py
--  T145 [US9] Add response schema for execution status in python_scripts/api/schemas/responses.py
+- [x] T144 [US9] Implement GET /api/v1/executions/{execution_id} endpoint in python_scripts/api/routers/executions.py
+- [x] T145 [US9] Add response schema for execution status in python_scripts/api/schemas/responses.py
 
 #### WebSocket Progress
 
--  T146 [US9] Implement WebSocket endpoint /api/v1/executions/{execution_id}/stream in python_scripts/api/routers/executions.py
--  T147 [US9] Integrate progress callbacks in workflow orchestration (emit progress events) in python_scripts/agents/agent_orchestrator.py
--  T148 [US9] Register executions router in python_scripts/api/main.py
+- [x] T146 [US9] Implement WebSocket endpoint /api/v1/executions/{execution_id}/stream in python_scripts/api/routers/executions.py
+- [x] T147 [US9] Integrate progress callbacks in workflow orchestration (emit progress events) in python_scripts/agents/agent_orchestrator.py
+- [x] T148 [US9] Register executions router in python_scripts/api/main.py
 
 #### API Documentation
 
--  T149 [US9] Verify OpenAPI schema matches contracts/api.yaml specification
--  T150 [US9] Add comprehensive docstrings to all endpoints (FastAPI docstrings)
--  T151 [US9] Ensure all endpoints have examples in OpenAPI schema
+- [x] T149 [US9] Verify OpenAPI schema matches contracts/api.yaml specification
+- [x] T150 [US9] Add comprehensive docstrings to all endpoints (FastAPI docstrings)
+- [x] T151 [US9] Ensure all endpoints have examples in OpenAPI schema
 
 **Checkpoint**: User Story 9 complete - all workflows accessible via REST API with WebSocket support
 
@@ -415,27 +415,27 @@
 
 ### Tests for User Story 10
 
--  T152 [P] [US10] Create unit test for audit logging in tests/unit/test_audit_logging.py
--  T153 [P] [US10] Create integration test for workflow traceability in tests/integration/test_workflow_traceability.py
+- [x] T152 [P] [US10] Create unit test for audit logging in tests/unit/test_audit_logging.py
+- [x] T153 [P] [US10] Create integration test for workflow traceability in tests/integration/test_workflow_traceability.py
 
 ### Implementation for User Story 10
 
 #### Audit Logging
 
--  T154 [US10] Implement audit log creation for all workflow steps in python_scripts/agents/base_agent.py
--  T155 [US10] Add structured audit logging with context (execution_id, agent_name, step_name) in python_scripts/utils/logging.py
--  T156 [P] [US10] Implement CRUD operations for AuditLog in python_scripts/database/crud_executions.py
+- [x] T154 [US10] Implement audit log creation for all workflow steps in python_scripts/agents/base_agent.py
+- [x] T155 [US10] Add structured audit logging with context (execution_id, agent_name, step_name) in python_scripts/utils/logging.py
+- [x] T156 [P] [US10] Implement CRUD operations for AuditLog in python_scripts/database/crud_executions.py
 
 #### Performance Metrics
 
--  T157 [US10] Record performance metrics (duration, tokens, pages crawled) after each workflow step in python_scripts/agents/agent_orchestrator.py
--  T158 [P] [US10] Implement CRUD operations for PerformanceMetric in python_scripts/database/crud_executions.py
+- [x] T157 [US10] Record performance metrics (duration, tokens, pages crawled) after each workflow step in python_scripts/agents/agent_orchestrator.py
+- [x] T158 [P] [US10] Implement CRUD operations for PerformanceMetric in python_scripts/database/crud_executions.py
 
 #### Error Handling
 
--  T159 [US10] Implement comprehensive error handling with stack trace logging in python_scripts/agents/agent_orchestrator.py
--  T160 [US10] Update workflow_executions status to "failed" with error_message on exceptions in python_scripts/agents/agent_orchestrator.py
--  T161 [US10] Implement retry logic with tenacity (max 3 attempts, exponential backoff) for I/O operations
+- [x] T159 [US10] Implement comprehensive error handling with stack trace logging in python_scripts/agents/agent_orchestrator.py
+- [x] T160 [US10] Update workflow_executions status to "failed" with error_message on exceptions in python_scripts/agents/agent_orchestrator.py
+- [x] T161 [US10] Implement retry logic with tenacity (max 3 attempts, exponential backoff) for I/O operations
 
 **Checkpoint**: User Story 10 complete - full traceability and observability implemented
 
