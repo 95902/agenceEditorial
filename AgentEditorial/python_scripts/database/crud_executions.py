@@ -1,14 +1,21 @@
-"""CRUD operations for WorkflowExecution and SiteAnalysisResult models."""
+"""CRUD operations for WorkflowExecution, SiteAnalysisResult, AuditLog and PerformanceMetric models."""
 
+import traceback
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.database.models import SiteAnalysisResult, WorkflowExecution
-from python_scripts.database.crud_topics import make_json_serializable
+from python_scripts.database.models import (
+    AuditLog,
+    PerformanceMetric,
+    SiteAnalysisResult,
+    WorkflowExecution,
+)
+from python_scripts.utils.json_utils import make_json_serializable
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -227,4 +234,307 @@ async def get_analysis_results_by_profile(
         .order_by(SiteAnalysisResult.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+# AuditLog CRUD
+
+
+async def create_audit_log(
+    db_session: AsyncSession,
+    action: str,
+    status: str,
+    message: str,
+    execution_id: Optional[UUID] = None,
+    agent_name: Optional[str] = None,
+    step_name: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+    error_traceback: Optional[str] = None,
+) -> AuditLog:
+    """
+    Create a new audit log entry.
+
+    Args:
+        db_session: Database session
+        action: Action being logged (e.g., "workflow_start", "step_complete")
+        status: Status of the action (e.g., "success", "error", "info")
+        message: Human-readable message
+        execution_id: Optional execution UUID
+        agent_name: Optional agent name
+        step_name: Optional step name
+        details: Optional additional details (JSON)
+        error_traceback: Optional error traceback
+
+    Returns:
+        Created AuditLog instance
+    """
+    audit_log = AuditLog(
+        execution_id=execution_id,
+        action=action,
+        agent_name=agent_name,
+        step_name=step_name,
+        status=status,
+        message=message,
+        details=make_json_serializable(details) if details else None,
+        error_traceback=error_traceback,
+        timestamp=datetime.now(timezone.utc),
+    )
+    db_session.add(audit_log)
+    await db_session.commit()
+    await db_session.refresh(audit_log)
+    logger.debug(
+        "Audit log created",
+        action=action,
+        status=status,
+        execution_id=str(execution_id) if execution_id else None,
+    )
+    return audit_log
+
+
+async def create_audit_log_from_exception(
+    db_session: AsyncSession,
+    action: str,
+    exception: Exception,
+    execution_id: Optional[UUID] = None,
+    agent_name: Optional[str] = None,
+    step_name: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> AuditLog:
+    """
+    Create an audit log entry from an exception.
+
+    Args:
+        db_session: Database session
+        action: Action that failed
+        exception: The exception that occurred
+        execution_id: Optional execution UUID
+        agent_name: Optional agent name
+        step_name: Optional step name
+        details: Optional additional details
+
+    Returns:
+        Created AuditLog instance
+    """
+    error_tb = traceback.format_exc()
+    return await create_audit_log(
+        db_session=db_session,
+        action=action,
+        status="error",
+        message=str(exception),
+        execution_id=execution_id,
+        agent_name=agent_name,
+        step_name=step_name,
+        details=details,
+        error_traceback=error_tb,
+    )
+
+
+async def get_audit_logs_by_execution(
+    db_session: AsyncSession,
+    execution_id: UUID,
+    limit: int = 100,
+) -> List[AuditLog]:
+    """
+    Get all audit logs for an execution.
+
+    Args:
+        db_session: Database session
+        execution_id: Execution UUID
+        limit: Maximum number of logs to return
+
+    Returns:
+        List of AuditLog instances
+    """
+    result = await db_session.execute(
+        select(AuditLog)
+        .where(AuditLog.execution_id == execution_id)
+        .order_by(AuditLog.timestamp.asc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_recent_audit_logs(
+    db_session: AsyncSession,
+    agent_name: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[AuditLog]:
+    """
+    Get recent audit logs with optional filters.
+
+    Args:
+        db_session: Database session
+        agent_name: Optional filter by agent name
+        status: Optional filter by status
+        limit: Maximum number of logs to return
+
+    Returns:
+        List of AuditLog instances
+    """
+    query = select(AuditLog)
+    
+    if agent_name:
+        query = query.where(AuditLog.agent_name == agent_name)
+    if status:
+        query = query.where(AuditLog.status == status)
+    
+    query = query.order_by(AuditLog.timestamp.desc()).limit(limit)
+    result = await db_session.execute(query)
+    return list(result.scalars().all())
+
+
+# PerformanceMetric CRUD
+
+
+async def create_performance_metric(
+    db_session: AsyncSession,
+    execution_id: UUID,
+    metric_type: str,
+    metric_value: float,
+    metric_unit: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    additional_data: Optional[Dict[str, Any]] = None,
+) -> PerformanceMetric:
+    """
+    Create a new performance metric entry.
+
+    Args:
+        db_session: Database session
+        execution_id: Execution UUID
+        metric_type: Type of metric (e.g., "duration_seconds", "tokens_used", "pages_crawled")
+        metric_value: Numeric value of the metric
+        metric_unit: Optional unit of measurement (e.g., "seconds", "tokens", "pages")
+        agent_name: Optional agent name
+        additional_data: Optional additional data (JSON)
+
+    Returns:
+        Created PerformanceMetric instance
+    """
+    metric = PerformanceMetric(
+        execution_id=execution_id,
+        agent_name=agent_name,
+        metric_type=metric_type,
+        metric_value=Decimal(str(metric_value)),
+        metric_unit=metric_unit,
+        additional_data=make_json_serializable(additional_data) if additional_data else None,
+    )
+    db_session.add(metric)
+    await db_session.commit()
+    await db_session.refresh(metric)
+    logger.debug(
+        "Performance metric created",
+        execution_id=str(execution_id),
+        metric_type=metric_type,
+        metric_value=metric_value,
+    )
+    return metric
+
+
+async def create_performance_metrics_batch(
+    db_session: AsyncSession,
+    execution_id: UUID,
+    metrics: List[Dict[str, Any]],
+    agent_name: Optional[str] = None,
+) -> List[PerformanceMetric]:
+    """
+    Create multiple performance metrics in batch.
+
+    Args:
+        db_session: Database session
+        execution_id: Execution UUID
+        metrics: List of dicts with keys: metric_type, metric_value, metric_unit (optional), additional_data (optional)
+        agent_name: Optional agent name
+
+    Returns:
+        List of created PerformanceMetric instances
+    """
+    created_metrics = []
+    for m in metrics:
+        metric = PerformanceMetric(
+            execution_id=execution_id,
+            agent_name=agent_name,
+            metric_type=m["metric_type"],
+            metric_value=Decimal(str(m["metric_value"])),
+            metric_unit=m.get("metric_unit"),
+            additional_data=make_json_serializable(m.get("additional_data")) if m.get("additional_data") else None,
+        )
+        db_session.add(metric)
+        created_metrics.append(metric)
+    
+    await db_session.commit()
+    for metric in created_metrics:
+        await db_session.refresh(metric)
+    
+    logger.debug(
+        "Performance metrics batch created",
+        execution_id=str(execution_id),
+        count=len(created_metrics),
+    )
+    return created_metrics
+
+
+async def get_performance_metrics_by_execution(
+    db_session: AsyncSession,
+    execution_id: UUID,
+) -> List[PerformanceMetric]:
+    """
+    Get all performance metrics for an execution.
+
+    Args:
+        db_session: Database session
+        execution_id: Execution UUID
+
+    Returns:
+        List of PerformanceMetric instances
+    """
+    result = await db_session.execute(
+        select(PerformanceMetric)
+        .where(PerformanceMetric.execution_id == execution_id)
+        .order_by(PerformanceMetric.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_performance_metrics_summary(
+    db_session: AsyncSession,
+    execution_id: UUID,
+) -> Dict[str, Any]:
+    """
+    Get a summary of performance metrics for an execution.
+
+    Args:
+        db_session: Database session
+        execution_id: Execution UUID
+
+    Returns:
+        Dict with metric_type as key and summarized values
+    """
+    metrics = await get_performance_metrics_by_execution(db_session, execution_id)
+    summary: Dict[str, Any] = {}
+    
+    for metric in metrics:
+        metric_type = metric.metric_type
+        if metric_type not in summary:
+            summary[metric_type] = {
+                "total": 0,
+                "count": 0,
+                "unit": metric.metric_unit,
+                "values": [],
+            }
+        summary[metric_type]["total"] += float(metric.metric_value)
+        summary[metric_type]["count"] += 1
+        summary[metric_type]["values"].append({
+            "value": float(metric.metric_value),
+            "agent": metric.agent_name,
+            "timestamp": metric.created_at.isoformat() if metric.created_at else None,
+        })
+    
+    # Calculate averages
+    for metric_type in summary:
+        if summary[metric_type]["count"] > 0:
+            summary[metric_type]["average"] = (
+                summary[metric_type]["total"] / summary[metric_type]["count"]
+            )
+    
+    return summary
 
