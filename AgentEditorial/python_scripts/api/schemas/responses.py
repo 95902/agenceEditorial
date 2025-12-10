@@ -10,10 +10,20 @@ from pydantic import BaseModel, Field
 class ExecutionResponse(BaseModel):
     """Response schema for workflow execution."""
 
-    execution_id: UUID = Field(..., description="Unique execution ID")
-    status: str = Field(..., description="Execution status")
-    start_time: Optional[datetime] = Field(None, description="Start time")
-    estimated_duration_minutes: Optional[int] = Field(None, description="Estimated duration")
+    execution_id: UUID = Field(..., description="Unique execution ID", examples=["123e4567-e89b-12d3-a456-426614174000"])
+    status: str = Field(..., description="Execution status (pending, running, completed, failed)", examples=["pending"])
+    start_time: Optional[datetime] = Field(None, description="Start time", examples=["2025-01-09T18:00:00Z"])
+    estimated_duration_minutes: Optional[int] = Field(None, description="Estimated duration in minutes", examples=[10])
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+                "status": "pending",
+                "start_time": "2025-01-09T18:00:00Z",
+                "estimated_duration_minutes": 10
+            }
+        }
 
 
 class SiteProfileResponse(BaseModel):
@@ -93,46 +103,6 @@ class TopicsResponse(BaseModel):
     topics: List[TopicResponse]
     total: int
     time_window_days: int
-
-
-class TrendsAnalysisResponse(BaseModel):
-    """Response schema for trends analysis (T130 - US7)."""
-
-    execution_id: str
-    status: str
-    message: str
-
-
-class TopicKeywordResponse(BaseModel):
-    """Response schema for a single topic keyword."""
-    
-    word: str
-    score: float
-
-
-class TopicInfoResponse(BaseModel):
-    """Response schema for topic information (T130 - US7)."""
-
-    topic_id: int
-    name: str
-    keywords: List[TopicKeywordResponse]
-    count: int
-    growth_rate: Optional[float] = None
-    is_emerging: Optional[bool] = None
-
-
-class TrendsTopicsResponse(BaseModel):
-    """Response schema for trends topics list (T130 - US7)."""
-
-    analysis_id: int
-    analysis_date: str
-    time_window_days: int
-    domains_included: List[str]
-    topics: List[TopicInfoResponse]
-    emerging_topics: List[TopicInfoResponse]
-    total_topics: int
-    total_articles: int
-    visualizations: Optional[Dict[str, str]] = None
 
 
 class GapResponse(BaseModel):

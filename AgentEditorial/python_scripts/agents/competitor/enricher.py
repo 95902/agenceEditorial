@@ -58,11 +58,10 @@ class CandidateEnricher:
 
                 # Crawl homepage
                 crawled = await crawl_with_permissions(
-                    self.db_session,
                     url=url,
-                    domain=domain,
+                    db_session=self.db_session,
                     use_cache=True,
-                    respect_robots_txt=True,
+                    respect_robots=True,
                 )
 
                 if crawled and crawled.get("text"):

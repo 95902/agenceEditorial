@@ -13,6 +13,13 @@ from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# User-Agent réaliste pour éviter les blocages
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+}
+
 
 class ArticleDiscovery:
     """Enhanced article discovery with multiple sources."""
@@ -28,7 +35,7 @@ class ArticleDiscovery:
         max_articles: int = 100,
     ) -> List[Dict[str, Any]]:
         """
-        Discover articles via REST API (WordPress, Ghost, etc.).
+        Discover articles via REST API (WordPress, Drupal, Ghost, etc.).
 
         Args:
             domain: Domain name
@@ -43,65 +50,195 @@ class ArticleDiscovery:
 
         # WordPress REST API
         if "posts" in api_endpoints:
-            posts_endpoint = api_endpoints["posts"]
-            api_url = urljoin(base_url, posts_endpoint)
+            articles = await self._discover_via_wordpress_api(base_url, api_endpoints, max_articles)
+        
+        # Drupal JSON:API
+        elif "articles" in api_endpoints:
+            articles = await self._discover_via_drupal_api(base_url, api_endpoints, max_articles)
 
-            try:
-                page = 1
-                per_page = 100  # WordPress max
+        return articles
 
-                while len(articles) < max_articles:
-                    params = {
-                        "per_page": min(per_page, max_articles - len(articles)),
-                        "page": page,
-                        "orderby": "date",
-                        "order": "desc",
-                        "_fields": "id,date,modified,slug,title,excerpt,link,author,categories,tags",
-                    }
+    async def _discover_via_wordpress_api(
+        self,
+        base_url: str,
+        api_endpoints: Dict[str, str],
+        max_articles: int,
+    ) -> List[Dict[str, Any]]:
+        """Discover articles via WordPress REST API."""
+        articles = []
+        posts_endpoint = api_endpoints["posts"]
+        api_url = urljoin(base_url, posts_endpoint)
 
-                    async with httpx.AsyncClient(
-                        verify=False,
-                        timeout=self.timeout,
-                        follow_redirects=True,
-                    ) as client:
-                        response = await client.get(api_url, params=params)
-                        if response.status_code != 200:
-                            break
+        try:
+            page = 1
+            per_page = 100  # WordPress max
 
+            while len(articles) < max_articles:
+                params = {
+                    "per_page": min(per_page, max_articles - len(articles)),
+                    "page": page,
+                    "orderby": "date",
+                    "order": "desc",
+                    "_fields": "id,date,modified,slug,title,excerpt,link,author,categories,tags",
+                }
+
+                async with httpx.AsyncClient(
+                    verify=False,
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
+                ) as client:
+                    response = await client.get(api_url, params=params)
+                    if response.status_code != 200:
+                        break
+
+                    # Verify Content-Type before parsing JSON
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "json" not in content_type:
+                        logger.warning(
+                            "API response is not JSON",
+                            url=api_url,
+                            content_type=content_type,
+                        )
+                        break
+
+                    try:
                         data = response.json()
-                        if not data or not isinstance(data, list):
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            "Failed to parse API response as JSON",
+                            url=api_url,
+                            error=str(e),
+                        )
+                        break
+                    if not data or not isinstance(data, list):
+                        break
+
+                    for post in data:
+                        if len(articles) >= max_articles:
                             break
 
-                        for post in data:
-                            if len(articles) >= max_articles:
-                                break
+                        title = post.get("title", {})
+                        if isinstance(title, dict):
+                            title = title.get("rendered", "")
 
-                            title = post.get("title", {})
-                            if isinstance(title, dict):
-                                title = title.get("rendered", "")
+                        articles.append({
+                            "url": post.get("link", ""),
+                            "title": title,
+                            "date": post.get("date"),
+                            "source": "api",
+                        })
 
-                            articles.append({
-                                "url": post.get("link", ""),
-                                "title": title,
-                                "date": post.get("date"),
-                                "source": "api",
-                            })
+                    # Check if there are more pages
+                    total_pages = int(response.headers.get("X-WP-TotalPages", 1))
+                    if page >= total_pages or len(data) < per_page:
+                        break
 
-                        # Check if there are more pages
-                        total_pages = int(response.headers.get("X-WP-TotalPages", 1))
-                        if page >= total_pages or len(data) < per_page:
+                    page += 1
+
+            logger.info(
+                "WordPress API discovery complete",
+                domain=urlparse(base_url).netloc,
+                articles_found=len(articles),
+            )
+
+        except Exception as e:
+            logger.warning("WordPress API discovery failed", base_url=base_url, error=str(e))
+
+        return articles
+
+    async def _discover_via_drupal_api(
+        self,
+        base_url: str,
+        api_endpoints: Dict[str, str],
+        max_articles: int,
+    ) -> List[Dict[str, Any]]:
+        """Discover articles via Drupal JSON:API."""
+        articles = []
+        articles_endpoint = api_endpoints.get("articles", "/jsonapi/node/article")
+        api_url = urljoin(base_url, articles_endpoint)
+
+        try:
+            offset = 0
+            per_page = 50  # Drupal default page limit
+
+            while len(articles) < max_articles:
+                params = {
+                    "page[limit]": min(per_page, max_articles - len(articles)),
+                    "page[offset]": offset,
+                    "sort": "-created",  # Sort by created date descending
+                }
+
+                async with httpx.AsyncClient(
+                    verify=False,
+                    timeout=self.timeout,
+                    follow_redirects=True,
+                    headers={**DEFAULT_HEADERS, "Accept": "application/vnd.api+json"},
+                ) as client:
+                    response = await client.get(api_url, params=params)
+                    if response.status_code != 200:
+                        break
+
+                    # Verify Content-Type before parsing JSON
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "json" not in content_type:
+                        logger.debug(
+                            "Drupal API response is not JSON",
+                            url=api_url,
+                            content_type=content_type,
+                        )
+                        continue  # Try next URL
+
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as e:
+                        logger.debug(
+                            "Failed to parse Drupal API response as JSON",
+                            url=api_url,
+                            error=str(e),
+                        )
+                        continue  # Try next URL
+                    items = data.get("data", [])
+                    if not items:
+                        break
+
+                    for item in items:
+                        if len(articles) >= max_articles:
                             break
 
-                        page += 1
+                        attributes = item.get("attributes", {})
+                        
+                        # Build article URL from path alias or node ID
+                        path = attributes.get("path", {})
+                        if isinstance(path, dict):
+                            article_path = path.get("alias") or f"/node/{item.get('id', '')}"
+                        else:
+                            article_path = f"/node/{item.get('id', '')}"
+                        
+                        article_url = urljoin(base_url, article_path)
+                        
+                        articles.append({
+                            "url": article_url,
+                            "title": attributes.get("title", ""),
+                            "date": attributes.get("created"),
+                            "source": "api",
+                        })
 
-                logger.info(
-                    "API discovery complete",
-                    domain=domain,
-                    articles_found=len(articles),
-                )
+                    # Check for next page
+                    links = data.get("links", {})
+                    if not links.get("next"):
+                        break
 
-            except Exception as e:
-                logger.warning("API discovery failed", domain=domain, error=str(e))
+                    offset += per_page
+
+            logger.info(
+                "Drupal API discovery complete",
+                domain=urlparse(base_url).netloc,
+                articles_found=len(articles),
+            )
+
+        except Exception as e:
+            logger.warning("Drupal API discovery failed", base_url=base_url, error=str(e))
 
         return articles
 
@@ -160,6 +297,7 @@ class ArticleDiscovery:
                     verify=False,
                     timeout=self.timeout,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.get(current_url)
                     if response.status_code != 200:
@@ -320,6 +458,7 @@ class ArticleDiscovery:
                     verify=False,
                     timeout=self.timeout,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.get(blog_page)
                     if response.status_code != 200:
@@ -401,6 +540,7 @@ class ArticleDiscovery:
                         url = entity.get("url")
                         if url:
                             info["article_urls"].append(url)
+
 
 
 

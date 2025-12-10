@@ -295,10 +295,15 @@ async def enhanced_scrape(
                 )
             
             # Extract domains from validated competitors
+            # Only include competitors that are validated=True or manual=True
             domains_to_scrape = [
                 comp.get("domain")
                 for comp in competitors_data
-                if comp.get("domain") and not comp.get("excluded", False)
+                if (
+                    comp.get("domain")
+                    and not comp.get("excluded", False)
+                    and (comp.get("validated", False) or comp.get("manual", False))
+                )
             ]
             
             if not domains_to_scrape:

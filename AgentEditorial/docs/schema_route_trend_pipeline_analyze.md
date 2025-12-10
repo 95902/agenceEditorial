@@ -496,3 +496,4 @@ workflow_executions (competitor_search)
 - **Minimum d'articles** : Nécessite un minimum d'articles (configurable, défaut: ~50)
 - **Coût LLM** : L'enrichissement LLM peut être coûteux (appels multiples)
 - **Scalabilité** : Le clustering peut être lent avec beaucoup d'articles (>10k)
+

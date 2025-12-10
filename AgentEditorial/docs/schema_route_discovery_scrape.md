@@ -434,3 +434,4 @@ workflow_executions (competitor_search)
 - Durée typique : ~8 minutes pour 10-50 domaines avec max_articles=100
 - Découverte multi-sources : API > RSS > Sitemap > Heuristics (ordre de priorité)
 - Cache de profils : Réduit le temps de profilage pour les domaines déjà analysés
+

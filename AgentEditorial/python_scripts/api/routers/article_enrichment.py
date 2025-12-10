@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from python_scripts.analysis.article_enrichment.article_enricher import ArticleEnricher
+from python_scripts.agents.trend_pipeline.article_enrichment.article_enricher import ArticleEnricher
 from python_scripts.api.dependencies import get_db_session as get_db
 from python_scripts.utils.logging import get_logger
 
@@ -22,15 +22,31 @@ router = APIRouter(prefix="/articles", tags=["Article Enrichment"])
 class EnrichArticleRequest(BaseModel):
     """Request schema for enriching a single article."""
     
-    article_id: int = Field(..., description="ArticleRecommendation ID")
-    client_domain: str = Field(..., description="Client domain (e.g., 'innosys.fr')")
+    article_id: int = Field(..., description="ArticleRecommendation ID", examples=[38])
+    client_domain: str = Field(..., description="Client domain (e.g., 'innosys.fr')", examples=["innosys.fr"])
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "article_id": 38,
+                "client_domain": "innosys.fr"
+            }
+        }
 
 
 class EnrichBatchRequest(BaseModel):
     """Request schema for enriching multiple articles."""
     
-    article_ids: List[int] = Field(..., min_length=1, description="List of ArticleRecommendation IDs")
-    client_domain: str = Field(..., description="Client domain (e.g., 'innosys.fr')")
+    article_ids: List[int] = Field(..., min_length=1, description="List of ArticleRecommendation IDs", examples=[[38, 39, 40]])
+    client_domain: str = Field(..., description="Client domain (e.g., 'innosys.fr')", examples=["innosys.fr"])
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "article_ids": [38, 39, 40],
+                "client_domain": "innosys.fr"
+            }
+        }
 
 
 class EnrichedArticleResponse(BaseModel):
@@ -61,6 +77,54 @@ class EnrichedBatchResponse(BaseModel):
     "/enrich",
     response_model=EnrichedArticleResponse,
     summary="Enrich a single article recommendation",
+    description="""
+    Enrich a single article recommendation with client context and statistics.
+    
+    This endpoint:
+    - Retrieves client context from site_analysis_results (editorial tone, keywords, audience, etc.)
+    - Fetches topic statistics (competitor volume, velocity, priority score, coverage gap)
+    - Uses LLM to enrich the outline with personalized sections and subsections
+    - Personalizes the hook with client-specific language and statistics
+    - Returns the enriched article structure ready for content creation
+    """,
+    responses={
+        200: {
+            "description": "Article enriched successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "article_id": 38,
+                        "original": {
+                            "title": "Article Title",
+                            "hook": "Original hook",
+                            "outline": ["Section 1", "Section 2"]
+                        },
+                        "enriched": {
+                            "enriched_hook": "Personalized hook with client context",
+                            "enriched_outline": {
+                                "introduction": {
+                                    "title": "Introduction Title",
+                                    "subsections": [],
+                                    "key_points": []
+                                }
+                            }
+                        },
+                        "client_context_used": {
+                            "domain": "innosys.fr",
+                            "editorial_tone": "Professional"
+                        },
+                        "statistics_used": {
+                            "competitor_volume": 774,
+                            "velocity": 0.5
+                        }
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Article not found"
+        }
+    },
 )
 async def enrich_article(
     request: EnrichArticleRequest,
@@ -69,11 +133,29 @@ async def enrich_article(
     """
     Enrich a single article recommendation with client context and statistics.
     
-    This endpoint:
-    - Retrieves client context from site_analysis_results
-    - Fetches topic statistics (volume, velocity, priority, etc.)
-    - Uses LLM to enrich the outline and personalize the hook
-    - Returns the enriched article structure
+    This endpoint enriches an article recommendation by:
+    - Retrieving client context from site_analysis_results (editorial tone, keywords, audience, etc.)
+    - Fetching topic statistics (competitor volume, velocity, priority score, coverage gap)
+    - Using LLM to enrich the outline with personalized sections and subsections
+    - Personalizing the hook with client-specific language and statistics
+    - Returning the enriched article structure ready for content creation
+    
+    Args:
+        request: Enrichment request with article_id and client_domain
+        db: Database session
+        
+    Returns:
+        Enriched article response with original and enriched versions
+        
+    Raises:
+        HTTPException: 404 if article not found, 500 on enrichment failure
+        
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/articles/enrich" \\
+          -H "Content-Type: application/json" \\
+          -d '{"article_id": 38, "client_domain": "innosys.fr"}'
+        ```
     """
     enricher = ArticleEnricher()
     

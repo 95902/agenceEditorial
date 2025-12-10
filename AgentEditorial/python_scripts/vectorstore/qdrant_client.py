@@ -181,19 +181,21 @@ class QdrantClientWrapper:
         score_threshold: Optional[float] = None,
         filter: Optional[Any] = None,
     ) -> list[Any]:
-        """Search for similar vectors."""
+        """Search for similar vectors using query_points (qdrant-client >= 1.10)."""
         # Ensure collection exists before searching
         self.ensure_collection_exists(collection_name)
         
         try:
-            results = self.client.search(
+            # Use query_points instead of deprecated search method
+            results = self.client.query_points(
                 collection_name=collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 limit=limit,
                 score_threshold=score_threshold,
                 query_filter=filter,
             )
-            return results
+            # query_points returns QueryResponse with .points attribute
+            return results.points if hasattr(results, 'points') else []
         except Exception as e:
             logger.error(
                 "Failed to search vectors",

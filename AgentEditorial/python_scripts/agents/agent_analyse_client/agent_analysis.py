@@ -104,9 +104,58 @@ def fix_json_common_issues(json_text: str) -> str:
     return json_text
 
 
+def extract_balanced_json(json_str: str, start_char: str) -> str:
+    """
+    Extract balanced JSON structure from a string.
+    
+    Args:
+        json_str: JSON string (may be incomplete)
+        start_char: Starting character ('[' for array, '{' for object)
+        
+    Returns:
+        Balanced JSON string, or original if cannot balance
+    """
+    json_str = json_str.strip()
+    
+    open_char = start_char
+    close_char = "]" if start_char == "[" else "}"
+    
+    count = 0
+    in_string = False
+    escape_next = False
+    result = []
+    
+    for char in json_str:
+        result.append(char)
+        
+        if escape_next:
+            escape_next = False
+            continue
+        
+        if char == "\\":
+            escape_next = True
+            continue
+        
+        if char == '"':
+            in_string = not in_string
+            continue
+        
+        if not in_string:
+            if char == open_char:
+                count += 1
+            elif char == close_char:
+                count -= 1
+                if count == 0:
+                    return "".join(result)
+    
+    # If not balanced, return as-is
+    return json_str
+
+
 def extract_partial_json(json_text: str, model_name: str) -> Dict[str, Any]:
     """
     Extract valid JSON parts even if full JSON is invalid.
+    Now properly handles nested objects and arrays.
 
     Args:
         json_text: Invalid JSON string
@@ -120,45 +169,106 @@ def extract_partial_json(json_text: str, model_name: str) -> Dict[str, Any]:
     """
     result = {}
 
-    # Try to extract key-value pairs
-    # Match: "key": value (where value can be string, number, boolean, null, object, array)
-    # More sophisticated pattern
-    pattern = r'"([^"]+)":\s*([^,}\]]+?)(?=\s*[,}\]])'
-    matches = re.findall(pattern, json_text)
-
-    for key, value in matches:
-        value = value.strip()
-        # Remove trailing commas
-        value = value.rstrip(",").strip()
-
-        # Try to parse value as JSON
-        try:
-            # Try as JSON first
-            result[key] = json.loads(value)
-        except (json.JSONDecodeError, ValueError):
-            # If not valid JSON, try to parse as nested JSON string
-            # Check if value looks like a JSON string (starts with { or [)
-            value_stripped = value.strip('"').strip("'")
-            if value_stripped.startswith(("{", "[")):
+    # Find all top-level key-value pairs with proper nesting handling
+    i = 0
+    while i < len(json_text):
+        # Find a key (quoted string followed by :)
+        key_match = re.search(r'"([^"]+)"\s*:', json_text[i:])
+        if not key_match:
+            break
+        
+        key = key_match.group(1)
+        value_start = i + key_match.end()
+        
+        # Skip whitespace
+        while value_start < len(json_text) and json_text[value_start] in ' \t\n\r':
+            value_start += 1
+        
+        if value_start >= len(json_text):
+            break
+        
+        value_char = json_text[value_start]
+        
+        # Handle different value types
+        if value_char == '{':
+            # Extract balanced object
+            balanced = extract_balanced_json(json_text[value_start:], '{')
+            try:
+                result[key] = json.loads(balanced)
+            except json.JSONDecodeError:
+                # Try to fix common issues
+                fixed = fix_json_common_issues(balanced)
                 try:
-                    result[key] = json.loads(value_stripped)
-                    continue
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                    result[key] = json.loads(fixed)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse JSON object value", key=key, value_preview=balanced[:50])
+            i = value_start + len(balanced)
             
-            # If not valid JSON, try to infer type
-            if value.lower() in ("true", "false"):
-                result[key] = value.lower() == "true"
-            elif value.lower() == "null":
+        elif value_char == '[':
+            # Extract balanced array
+            balanced = extract_balanced_json(json_text[value_start:], '[')
+            try:
+                result[key] = json.loads(balanced)
+            except json.JSONDecodeError:
+                fixed = fix_json_common_issues(balanced)
+                try:
+                    result[key] = json.loads(fixed)
+                except json.JSONDecodeError:
+                    logger.warning("Could not parse JSON array value", key=key, value_preview=balanced[:50])
+            i = value_start + len(balanced)
+            
+        elif value_char == '"':
+            # Extract string value
+            string_end = value_start + 1
+            escape_next = False
+            while string_end < len(json_text):
+                if escape_next:
+                    escape_next = False
+                    string_end += 1
+                    continue
+                if json_text[string_end] == '\\':
+                    escape_next = True
+                    string_end += 1
+                    continue
+                if json_text[string_end] == '"':
+                    string_end += 1
+                    break
+                string_end += 1
+            
+            try:
+                result[key] = json.loads(json_text[value_start:string_end])
+            except json.JSONDecodeError:
+                result[key] = json_text[value_start+1:string_end-1]
+            i = string_end
+            
+        else:
+            # Primitive value (number, boolean, null)
+            value_end = value_start
+            while value_end < len(json_text) and json_text[value_end] not in ',}]\n':
+                value_end += 1
+            
+            value = json_text[value_start:value_end].strip()
+            
+            if value.lower() == 'true':
+                result[key] = True
+            elif value.lower() == 'false':
+                result[key] = False
+            elif value.lower() == 'null':
                 result[key] = None
-            elif value.isdigit():
-                result[key] = int(value)
-            elif re.match(r"^-?\d+\.\d+$", value):
-                result[key] = float(value)
             else:
-                # Remove quotes if present
-                value = value.strip('"').strip("'")
-                result[key] = value
+                try:
+                    if '.' in value:
+                        result[key] = float(value)
+                    else:
+                        result[key] = int(value)
+                except ValueError:
+                    result[key] = value
+            
+            i = value_end
+        
+        # Move past any separator
+        while i < len(json_text) and json_text[i] in ',\n\r\t ':
+            i += 1
 
     if not result:
         logger.warning("Could not extract any valid JSON parts", model=model_name)
@@ -490,6 +600,7 @@ class EditorialAnalysisAgent(BaseAgent):
         except Exception as e:
             self.log_step("analysis_failed", "failed", f"Analysis failed: {e}")
             raise
+
 
 
 

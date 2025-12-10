@@ -174,27 +174,18 @@ class ArticleScorer:
 
         selected = []
 
-        # Take "very probable" (score >= 60)
-        for url_data in sorted_urls:
-            if url_data.get("initial_score", 0) >= 60:
-                selected.append(url_data["url"])
-                if len(selected) >= max_articles:
-                    break
-
-        # If not enough, take "probable" (score >= 40)
-        if len(selected) < max_articles:
+        # Dynamic threshold adjustment: progressively lower threshold if not enough URLs
+        thresholds = [60, 50, 40, 30, 20, 10, 0]  # Progressive lowering
+        
+        for threshold in thresholds:
+            if len(selected) >= max_articles:
+                break
+            
             for url_data in sorted_urls:
+                if url_data["url"] in selected:
+                    continue
                 score = url_data.get("initial_score", 0)
-                if 40 <= score < 60:
-                    selected.append(url_data["url"])
-                    if len(selected) >= max_articles:
-                        break
-
-        # If still not enough, take "uncertain" (score >= 20)
-        if len(selected) < max_articles:
-            for url_data in sorted_urls:
-                score = url_data.get("initial_score", 0)
-                if 20 <= score < 40:
+                if score >= threshold:
                     selected.append(url_data["url"])
                     if len(selected) >= max_articles:
                         break
@@ -213,6 +204,7 @@ class ArticleScorer:
             return "unlikely"
         else:
             return "improbable"
+
 
 
 

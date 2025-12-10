@@ -268,50 +268,8 @@ class ClientArticle(Base, TimestampMixin, SoftDeleteMixin):
     )
 
 
-# 5. editorial_trends
-class EditorialTrend(Base, SoftDeleteMixin):
-    """Editorial trends model."""
-
-    __tablename__ = "editorial_trends"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
-    analysis_date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
-    trend_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    trend_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    time_window_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-
-    __table_args__ = (
-        Index("ix_editorial_trends_domain_date_type", "domain", "analysis_date", "trend_type"),
-    )
-
-
-# 6. bertopic_analysis
-class BertopicAnalysis(Base, SoftDeleteMixin):
-    """BERTopic analysis model."""
-
-    __tablename__ = "bertopic_analysis"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    analysis_date: Mapped[datetime] = mapped_column(Date, nullable=False, index=True)
-    time_window_days: Mapped[int] = mapped_column(Integer, nullable=False)
-    domains_included: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    topics: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    topic_hierarchy: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    topics_over_time: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    visualizations: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    model_parameters: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        TIMESTAMP(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-        index=True,
-    )
+# Note: editorial_trends and bertopic_analysis tables removed in migration e40ad65afb31
+# These tables were only used by the removed trends router
 
 
 # 7. topic_clusters (ETAGE 1 - Clustering BERTopic)

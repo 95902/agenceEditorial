@@ -13,12 +13,10 @@ from python_scripts.config.settings import settings
 from python_scripts.database.db_session import Base
 from python_scripts.database.models import (  # noqa: F401
     AuditLog,
-    BertopicAnalysis,
     ClientArticle,
     CompetitorArticle,
     CrawlCache,
     DiscoveryLog,
-    EditorialTrend,
     ErrorLog,
     PerformanceMetric,
     ScrapingPermission,

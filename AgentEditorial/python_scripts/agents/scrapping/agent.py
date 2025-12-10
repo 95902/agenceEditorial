@@ -277,11 +277,27 @@ class EnhancedScrapingAgent(BaseAgent):
             scored_urls.sort(key=lambda x: x["initial_score"], reverse=True)
             urls_to_scrape = self.scorer.select_urls_to_scrape(scored_urls, max_articles)
 
+            # Log rejected URLs (score too low)
+            rejected_urls = [
+                url_data for url_data in scored_urls
+                if url_data["url"] not in urls_to_scrape
+            ]
+            if rejected_urls:
+                logger.debug(
+                    "URLs rejected by scoring",
+                    domain=domain,
+                    rejected_count=len(rejected_urls),
+                    min_rejected_score=min(u["initial_score"] for u in rejected_urls) if rejected_urls else 0,
+                    max_rejected_score=max(u["initial_score"] for u in rejected_urls) if rejected_urls else 0,
+                    sample_rejected=rejected_urls[:5],  # Log first 5
+                )
+
             logger.info(
                 "Scoring complete",
                 domain=domain,
                 total=len(scored_urls),
                 selected=len(urls_to_scrape),
+                rejected=len(rejected_urls),
                 min_score=scored_urls[-1]["initial_score"] if scored_urls else 0,
                 max_score=scored_urls[0]["initial_score"] if scored_urls else 0,
             )
@@ -347,6 +363,19 @@ class EnhancedScrapingAgent(BaseAgent):
                         "_title_selector_used": article.get("_title_selector_used"),
                         "_date_selector_used": article.get("_date_selector_used"),
                     })
+
+                    # Log detailed rejection reasons
+                    if not is_valid:
+                        logger.debug(
+                            "Article validation failed",
+                            domain=domain,
+                            url=url,
+                            reason=reason,
+                            word_count=article.get("word_count", 0),
+                            has_title=bool(article.get("title")),
+                            has_content=bool(article.get("content")),
+                            min_word_count=self.min_word_count,
+                        )
 
                     if is_valid:
                         # Get published_time (datetime) and convert to date for database

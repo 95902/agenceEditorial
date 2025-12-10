@@ -54,14 +54,16 @@ async def crawl_page_async(
     url: str,
     timeout: float = 30.0,
     check_cache: bool = True,
+    db_session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
     """
-    Crawl a single page and extract content.
+    Crawl a single page and extract content with optional caching.
     
     Args:
         url: URL to crawl
         timeout: Request timeout in seconds
-        check_cache: Whether to check cache (not used, kept for API compatibility)
+        check_cache: Whether to check cache
+        db_session: Database session (optional, for caching)
         
     Returns:
         Dictionary with crawl results
@@ -77,6 +79,26 @@ async def crawl_page_async(
         "error": None,
         "crawled_at": datetime.now(timezone.utc).isoformat(),
     }
+    
+    # Check cache if enabled and db_session provided
+    if check_cache and db_session:
+        from python_scripts.database.crud_crawl_cache import get_crawl_cache
+        
+        cached = await get_crawl_cache(db_session, url)
+        if cached:
+            logger.debug("Using cached crawl result", url=url)
+            result["success"] = True
+            result["text"] = cached.cached_content
+            result["cached"] = True
+            
+            # Extract metadata if available
+            if cached.cached_metadata:
+                result["title"] = cached.cached_metadata.get("title", "")
+                result["description"] = cached.cached_metadata.get("description", "")
+                result["html"] = cached.cached_metadata.get("html", "")
+                result["status_code"] = cached.cached_metadata.get("status_code", 200)
+            
+            return result
     
     try:
         async with httpx.AsyncClient(
@@ -139,6 +161,26 @@ async def crawl_page_async(
         result["error"] = f"Error: {str(e)[:100]}"
         logger.debug(f"Crawl error for {url}: {e}")
     
+    # Save to cache if successful and db_session provided
+    if result["success"] and db_session and check_cache:
+        try:
+            from python_scripts.database.crud_crawl_cache import create_or_update_crawl_cache
+            
+            await create_or_update_crawl_cache(
+                db_session=db_session,
+                url=url,
+                cached_content=result["text"],
+                cached_metadata={
+                    "title": result["title"],
+                    "description": result["description"],
+                    "html": result.get("html", ""),
+                    "status_code": result.get("status_code", 200),
+                },
+            )
+        except Exception as e:
+            # Don't fail the crawl if cache save fails
+            logger.warning(f"Failed to save crawl cache for {url}: {e}")
+    
     return result
 
 
@@ -150,11 +192,11 @@ async def crawl_with_permissions(
     timeout: float = 30.0,
 ) -> Dict[str, Any]:
     """
-    Crawl a page with permission checks (robots.txt).
+    Crawl a page with permission checks (robots.txt) using cached permissions.
     
     Args:
         url: URL to crawl
-        db_session: Database session (optional, for caching)
+        db_session: Database session (optional, for caching robots.txt and crawl cache)
         use_cache: Whether to use cache
         respect_robots: Whether to respect robots.txt
         timeout: Request timeout
@@ -164,22 +206,56 @@ async def crawl_with_permissions(
     """
     # Check robots.txt if requested
     if respect_robots:
-        allowed = await check_robots_txt(url)
-        if not allowed:
-            return {
-                "url": url,
-                "success": False,
-                "error": "Blocked by robots.txt",
-                "html": "",
-                "text": "",
-                "title": "",
-                "description": "",
-                "status_code": None,
-                "crawled_at": datetime.now(timezone.utc).isoformat(),
-            }
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        
+        # Use parse_robots_txt with caching if db_session is provided
+        if db_session:
+            from python_scripts.ingestion.robots_txt import parse_robots_txt
+            
+            parser = await parse_robots_txt(
+                domain=domain,
+                db_session=db_session,
+                use_cache=use_cache,
+            )
+            
+            if parser:
+                # Check if URL is allowed
+                if not parser.is_allowed(url):
+                    return {
+                        "url": url,
+                        "success": False,
+                        "error": "Blocked by robots.txt",
+                        "html": "",
+                        "text": "",
+                        "title": "",
+                        "description": "",
+                        "status_code": None,
+                        "crawled_at": datetime.now(timezone.utc).isoformat(),
+                    }
+        else:
+            # Fallback to simple check if no db_session
+            allowed = await check_robots_txt(url)
+            if not allowed:
+                return {
+                    "url": url,
+                    "success": False,
+                    "error": "Blocked by robots.txt",
+                    "html": "",
+                    "text": "",
+                    "title": "",
+                    "description": "",
+                    "status_code": None,
+                    "crawled_at": datetime.now(timezone.utc).isoformat(),
+                }
     
-    # Crawl the page
-    return await crawl_page_async(url, timeout=timeout, check_cache=use_cache)
+    # Crawl the page (with cache support if db_session provided)
+    return await crawl_page_async(
+        url,
+        timeout=timeout,
+        check_cache=use_cache,
+        db_session=db_session,
+    )
 
 
 async def crawl_multiple_pages(
