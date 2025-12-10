@@ -11,10 +11,8 @@ from python_scripts.api.routers import (
     errors,
     executions,
     health,
-    scraping,
     sites,
     trend_pipeline,
-    trends,
 )
 from python_scripts.config.settings import settings
 from python_scripts.utils.logging import setup_logging
@@ -47,9 +45,7 @@ setup_rate_limiting(app)
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(sites.router, prefix="/api/v1")
 app.include_router(competitors.router, prefix="/api/v1")
-app.include_router(scraping.router, prefix="/api/v1")
 app.include_router(discovery.router, prefix="/api/v1")
-app.include_router(trends.router, prefix="/api/v1")
 app.include_router(trend_pipeline.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
 app.include_router(errors.router, prefix="/api/v1")

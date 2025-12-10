@@ -1,6 +1,7 @@
 """API router for site analysis endpoints."""
 
-from typing import List, Optional
+import json
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -28,6 +29,52 @@ from python_scripts.utils.exceptions import WorkflowError
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _safe_json_field(value: Any) -> Optional[Dict[str, Any]]:
+    """
+    Safely convert a JSON field value to a dictionary.
+    
+    Handles cases where the value might be:
+    - None -> return None
+    - Already a dict -> return as-is
+    - A JSON string -> try to parse
+    - A malformed/truncated string -> return empty dict with error info
+    
+    Args:
+        value: The value to convert
+        
+    Returns:
+        A dictionary or None
+    """
+    if value is None:
+        return None
+    
+    if isinstance(value, dict):
+        return value
+    
+    if isinstance(value, str):
+        value_stripped = value.strip()
+        if value_stripped.startswith(("{", "[")):
+            try:
+                parsed = json.loads(value_stripped)
+                if isinstance(parsed, dict):
+                    return parsed
+                elif isinstance(parsed, list):
+                    return {"items": parsed}
+                return {"value": parsed}
+            except json.JSONDecodeError:
+                # Malformed JSON - return empty dict with raw value indicator
+                logger.warning(
+                    "Malformed JSON field detected",
+                    value_preview=value[:100] if len(value) > 100 else value,
+                )
+                return {"_raw_malformed": value[:200] if len(value) > 200 else value}
+        # Not JSON-like string
+        return {"value": value}
+    
+    # Other types - wrap in dict
+    return {"value": str(value)}
 
 router = APIRouter(prefix="/sites", tags=["sites"])
 
@@ -70,7 +117,35 @@ async def run_analysis_background(
     response_model=ExecutionResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start editorial analysis",
-    description="Start an editorial analysis workflow for a domain. Returns execution_id for polling.",
+    description="""
+    Start an editorial analysis workflow for a domain.
+    
+    This endpoint:
+    1. Crawls pages from the domain (via sitemap or homepage)
+    2. Analyzes editorial style using multiple LLMs (Llama3, Mistral, Phi3)
+    3. Creates/updates the site profile with editorial characteristics
+    4. Returns an execution_id for tracking progress
+    
+    Use the execution_id to:
+    - Poll status: GET /api/v1/executions/{execution_id}
+    - Stream progress: WebSocket /api/v1/executions/{execution_id}/stream
+    - Get results: GET /api/v1/sites/{domain}
+    """,
+    responses={
+        202: {
+            "description": "Analysis started successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+                        "status": "pending",
+                        "start_time": None,
+                        "estimated_duration_minutes": None,
+                    }
+                }
+            }
+        }
+    },
 )
 async def analyze_site(
     request: SiteAnalysisRequest,
@@ -80,13 +155,36 @@ async def analyze_site(
     """
     Start editorial analysis for a domain.
 
+    This workflow analyzes the editorial style of a website by:
+    - Discovering pages via sitemap
+    - Crawling and extracting content
+    - Running multi-LLM analysis (language level, tone, audience, keywords, etc.)
+    - Creating a comprehensive editorial profile
+
     Args:
         request: Analysis request with domain and max_pages
         background_tasks: FastAPI background tasks
         db: Database session
 
     Returns:
-        Execution response with execution_id
+        Execution response with execution_id for tracking
+        
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/sites/analyze" \\
+          -H "Content-Type: application/json" \\
+          -d '{"domain": "innosys.fr", "max_pages": 50}'
+        ```
+        
+        Response:
+        ```json
+        {
+            "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+            "status": "pending",
+            "start_time": null,
+            "estimated_duration_minutes": null
+        }
+        ```
     """
     try:
         from python_scripts.database.crud_executions import create_workflow_execution
@@ -162,13 +260,13 @@ async def get_site_profile(
         analysis_date=profile.analysis_date,
         language_level=profile.language_level,
         editorial_tone=profile.editorial_tone,
-        target_audience=profile.target_audience,
-        activity_domains=profile.activity_domains,
-        content_structure=profile.content_structure,
-        keywords=profile.keywords,
-        style_features=profile.style_features,
+        target_audience=_safe_json_field(profile.target_audience),
+        activity_domains=_safe_json_field(profile.activity_domains),
+        content_structure=_safe_json_field(profile.content_structure),
+        keywords=_safe_json_field(profile.keywords),
+        style_features=_safe_json_field(profile.style_features),
         pages_analyzed=profile.pages_analyzed,
-        llm_models_used=profile.llm_models_used,
+        llm_models_used=_safe_json_field(profile.llm_models_used),
     )
 
 
@@ -201,13 +299,13 @@ async def list_sites(
             analysis_date=profile.analysis_date,
             language_level=profile.language_level,
             editorial_tone=profile.editorial_tone,
-            target_audience=profile.target_audience,
-            activity_domains=profile.activity_domains,
-            content_structure=profile.content_structure,
-            keywords=profile.keywords,
-            style_features=profile.style_features,
+            target_audience=_safe_json_field(profile.target_audience),
+            activity_domains=_safe_json_field(profile.activity_domains),
+            content_structure=_safe_json_field(profile.content_structure),
+            keywords=_safe_json_field(profile.keywords),
+            style_features=_safe_json_field(profile.style_features),
             pages_analyzed=profile.pages_analyzed,
-            llm_models_used=profile.llm_models_used,
+            llm_models_used=_safe_json_field(profile.llm_models_used),
         )
         for profile in profiles
     ]
@@ -330,11 +428,11 @@ async def get_site_history_endpoint(
             language_level=profile.language_level,
             editorial_tone=profile.editorial_tone,
             pages_analyzed=profile.pages_analyzed,
-            target_audience=profile.target_audience,
-            activity_domains=profile.activity_domains,
-            content_structure=profile.content_structure,
-            keywords=profile.keywords,
-            style_features=profile.style_features,
+            target_audience=_safe_json_field(profile.target_audience),
+            activity_domains=_safe_json_field(profile.activity_domains),
+            content_structure=_safe_json_field(profile.content_structure),
+            keywords=_safe_json_field(profile.keywords),
+            style_features=_safe_json_field(profile.style_features),
         )
         for profile in history_profiles
     ]

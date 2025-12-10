@@ -32,6 +32,93 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/competitors", tags=["competitors"])
 
 
+async def auto_validate_competitors(
+    db_session: AsyncSession,
+    domain: str,
+    execution,
+) -> None:
+    """
+    Automatically validate all competitors found in a search execution.
+    
+    This function marks all competitors as validated=True by default,
+    allowing them to be scraped without manual validation.
+    
+    Args:
+        db_session: Database session
+        domain: Domain name
+        execution: WorkflowExecution object with search results
+    """
+    try:
+        if not execution or not execution.output_data:
+            logger.warning(
+                "Cannot auto-validate: no execution data",
+                domain=domain,
+            )
+            return
+        
+        competitors = execution.output_data.get("competitors", [])
+        if not competitors:
+            logger.info(
+                "No competitors to validate",
+                domain=domain,
+            )
+            return
+        
+        # Auto-validate all competitors (mark as validated=True)
+        validated_competitors = []
+        for comp in competitors:
+            validated_comp = comp.copy()
+            
+            # Mark as validated unless explicitly excluded
+            if not comp.get("excluded", False):
+                validated_comp["validation_status"] = "validated"
+                validated_comp["validated"] = True
+                validated_comp["manual"] = False
+                validated_comp["excluded"] = False
+            else:
+                # Keep excluded status
+                validated_comp["validation_status"] = "excluded"
+                validated_comp["validated"] = False
+                validated_comp["manual"] = False
+                validated_comp["excluded"] = True
+            
+            validated_competitors.append(validated_comp)
+        
+        # Update execution output_data with validation flags
+        updated_output_data = execution.output_data.copy()
+        updated_output_data["competitors"] = validated_competitors
+        updated_output_data["validation_date"] = time.time()
+        updated_output_data["auto_validated"] = True  # Flag to indicate auto-validation
+        
+        # Update execution
+        from python_scripts.database.crud_executions import update_workflow_execution
+        
+        await update_workflow_execution(
+            db_session,
+            execution,
+            output_data=updated_output_data,
+        )
+        
+        validated_count = sum(1 for c in validated_competitors if c.get("validated", False))
+        excluded_count = sum(1 for c in validated_competitors if c.get("excluded", False))
+        
+        logger.info(
+            "Competitors auto-validated",
+            domain=domain,
+            total=len(validated_competitors),
+            validated=validated_count,
+            excluded=excluded_count,
+        )
+        
+    except Exception as e:
+        logger.error(
+            "Failed to auto-validate competitors",
+            domain=domain,
+            error=str(e),
+        )
+        # Don't raise - validation failure shouldn't break the search
+
+
 async def run_competitor_search_background(
     domain: str,
     max_competitors: int,
@@ -85,6 +172,21 @@ async def run_competitor_search_background(
                 domain=domain,
                 competitors_found=len(results),
             )
+            
+            # Auto-validate all competitors found
+            # Reload execution to get latest output_data
+            execution = await get_workflow_execution(db_session, execution_id)
+            if execution:
+                await auto_validate_competitors(
+                    db_session,
+                    domain,
+                    execution,
+                )
+                logger.info(
+                    "Auto-validation completed",
+                    execution_id=str(execution_id),
+                    domain=domain,
+                )
 
     except Exception as e:
         logger.error(
@@ -116,7 +218,39 @@ async def run_competitor_search_background(
     response_model=ExecutionResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Start competitor search",
-    description="Start a competitor search workflow for a domain. Returns execution_id for polling.",
+    description="""
+    Start a competitor search workflow for a domain.
+    
+    This endpoint:
+    1. Searches competitors using multiple sources (Tavily, DuckDuckGo)
+    2. Filters and validates candidates using LLM classification
+    3. Ranks competitors by relevance and confidence scores
+    4. **Automatically validates all found competitors** (validated=True)
+    5. Returns validated competitors with metadata
+    
+    **Note**: All competitors are automatically validated after the search completes.
+    You no longer need to call POST /api/v1/competitors/{domain}/validate separately.
+    
+    Use the execution_id to:
+    - Poll status: GET /api/v1/executions/{execution_id}
+    - Stream progress: WebSocket /api/v1/executions/{execution_id}/stream
+    - Get results: GET /api/v1/competitors/{domain}
+    """,
+    responses={
+        202: {
+            "description": "Competitor search started successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+                        "status": "pending",
+                        "start_time": None,
+                        "estimated_duration_minutes": 8,
+                    }
+                }
+            }
+        }
+    },
 )
 async def search_competitors(
     request: CompetitorSearchRequest,
@@ -126,13 +260,40 @@ async def search_competitors(
     """
     Start competitor search for a domain.
 
+    This workflow identifies competitors by:
+    - Multi-source search (Tavily API, DuckDuckGo, web crawling)
+    - LLM-based filtering to remove false positives
+    - Relevance scoring and ranking
+    - Validation and deduplication
+    - **Automatic validation**: All found competitors are automatically marked as validated=True
+
+    **Important**: After the search completes, all competitors are automatically validated.
+    You can immediately use them for scraping without calling the validate endpoint.
+
     Args:
-        request: Search request with domain and max_competitors
+        request: Search request with domain and max_competitors (3-100)
         background_tasks: FastAPI background tasks
         db: Database session
 
     Returns:
-        Execution response with execution_id
+        Execution response with execution_id for tracking
+
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/competitors/search" \\
+          -H "Content-Type: application/json" \\
+          -d '{"domain": "innosys.fr", "max_competitors": 10}'
+        ```
+
+        Response:
+        ```json
+        {
+            "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+            "status": "pending",
+            "start_time": null,
+            "estimated_duration_minutes": 8
+        }
+        ```
     """
     try:
         # Create execution record
