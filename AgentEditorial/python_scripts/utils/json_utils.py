@@ -79,6 +79,53 @@ def normalize_json_list(data: List[Any]) -> List[Any]:
     return [normalize_json_value(item) for item in data]
 
 
+def make_json_serializable(obj: Any) -> Any:
+    """
+    Convert non-JSON-serializable objects to serializable types.
+    
+    Handles:
+    - pandas Timestamp -> str (ISO format)
+    - numpy types (int64, float64, etc.) -> Python int/float
+    - datetime objects -> str (ISO format)
+    - float("inf"), float("-inf"), float("nan") -> None or large number
+    - nested dicts and lists
+    """
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime
+    
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    elif isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        val = float(obj)
+        # Handle infinity and NaN
+        if np.isinf(val):
+            return None if val > 0 else None  # Replace inf with None
+        elif np.isnan(val):
+            return None
+        return val
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, (float, int)):
+        # Handle Python float infinity and NaN
+        if isinstance(obj, float):
+            if obj == float("inf") or obj == float("-inf"):
+                return None
+            elif obj != obj:  # NaN check
+                return None
+        return obj
+    elif isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    else:
+        return obj
+
+
 
 
 
