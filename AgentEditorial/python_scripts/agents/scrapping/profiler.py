@@ -12,6 +12,15 @@ from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# User-Agent réaliste pour éviter les blocages
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
+
 
 # CMS Detection Rules
 CMS_DETECTION_RULES = {
@@ -113,6 +122,8 @@ class SiteProfiler:
 
         profile = {
             "domain": domain,
+            "final_domain": None,  # Domain after redirects
+            "redirected": False,  # Whether domain was redirected
             "cms_detected": None,
             "cms_version": None,
             "has_rest_api": False,
@@ -131,45 +142,91 @@ class SiteProfiler:
         }
 
         try:
-            # 1. Fetch homepage
-            async with httpx.AsyncClient(
-                verify=False,
-                timeout=self.timeout,
-                follow_redirects=True,
-            ) as client:
-                response = await client.get(base_url)
-                if response.status_code != 200:
-                    logger.warning(
-                        "Failed to fetch homepage",
-                        domain=domain,
-                        status_code=response.status_code,
-                    )
-                    return profile
+            # 1. Fetch homepage with retries and detect redirects
+            html = None
+            final_url = None
+            response_headers = {}
+            for attempt in range(3):  # 3 retries
+                try:
+                    async with httpx.AsyncClient(
+                        verify=False,
+                        timeout=self.timeout,
+                        follow_redirects=True,
+                        headers=DEFAULT_HEADERS,
+                    ) as client:
+                        response = await client.get(base_url)
+                        response_headers = response.headers
+                        if response.status_code == 200:
+                            html = response.text
+                            final_url = str(response.url)
+                            
+                            # Detect domain redirect
+                            final_domain = urlparse(final_url).netloc.replace("www.", "")
+                            original_domain = domain.replace("www.", "")
+                            
+                            if final_domain != original_domain:
+                                profile["redirected"] = True
+                                profile["final_domain"] = final_domain
+                                logger.info(
+                                    "Domain redirect detected",
+                                    original_domain=original_domain,
+                                    final_domain=final_domain,
+                                )
+                            else:
+                                profile["final_domain"] = original_domain
+                            
+                            break
+                        elif response.status_code in [403, 429]:
+                            # Blocked or rate limited - log and continue
+                            logger.warning(
+                                "Site may be blocking requests",
+                                domain=domain,
+                                status_code=response.status_code,
+                                attempt=attempt + 1,
+                            )
+                except httpx.TimeoutException:
+                    logger.debug("Timeout on attempt", domain=domain, attempt=attempt + 1)
+                except Exception as e:
+                    logger.debug("Connection error", domain=domain, attempt=attempt + 1, error=str(e))
+            
+            if not html:
+                logger.warning(
+                    "Failed to fetch homepage after retries",
+                    domain=domain,
+                )
+                return profile
 
-                html = response.text
-                soup = BeautifulSoup(html, "html.parser")
+            soup = BeautifulSoup(html, "html.parser")
+            
+            # Use final domain for subsequent requests if redirected
+            effective_domain = profile.get("final_domain") or domain
 
             # 2. Detect CMS
-            cms_info = self._detect_cms(html, response.headers)
+            cms_info = self._detect_cms(html, response_headers)
             profile["cms_detected"] = cms_info.get("cms")
             profile["cms_version"] = cms_info.get("version")
 
-            # 3. Test APIs
+            # 3. Test APIs based on CMS
             if profile["cms_detected"] == "wordpress":
-                api_info = await self._test_wordpress_api(domain)
+                api_info = await self._test_wordpress_api(effective_domain)
+                if api_info:
+                    profile["has_rest_api"] = True
+                    profile["api_endpoints"] = api_info
+            elif profile["cms_detected"] == "drupal":
+                api_info = await self._test_drupal_api(effective_domain)
                 if api_info:
                     profile["has_rest_api"] = True
                     profile["api_endpoints"] = api_info
 
             # 4. Discover sitemaps
-            profile["sitemap_urls"] = await self._discover_sitemaps(domain)
+            profile["sitemap_urls"] = await self._discover_sitemaps(effective_domain)
 
             # 5. Discover RSS feeds
-            profile["rss_feeds"] = await self._discover_rss_feeds(domain, html, soup)
+            profile["rss_feeds"] = await self._discover_rss_feeds(effective_domain, html, soup)
 
             # 6. Discover blog listing pages
             profile["blog_listing_pages"] = await self._discover_blog_listing_pages(
-                domain, html, soup
+                effective_domain, html, soup
             )
 
             # 7. Analyze URL patterns
@@ -242,6 +299,7 @@ class SiteProfiler:
                 verify=False,
                 timeout=self.timeout,
                 follow_redirects=True,
+                headers=DEFAULT_HEADERS,
             ) as client:
                 response = await client.get(test_url)
                 if response.status_code == 200:
@@ -252,6 +310,43 @@ class SiteProfiler:
                     }
         except Exception as e:
             logger.debug("WordPress API test failed", domain=domain, error=str(e))
+
+        return None
+
+    async def _test_drupal_api(self, domain: str) -> Optional[Dict[str, str]]:
+        """Test Drupal JSON API availability."""
+        base_url = f"https://{domain}"
+        
+        # Test Drupal 8/9/10 JSON:API
+        test_urls = [
+            f"{base_url}/jsonapi/node/article?page[limit]=1",
+            f"{base_url}/jsonapi/node/page?page[limit]=1",
+            f"{base_url}/api/node/article?_format=json",
+            f"{base_url}/rest/node/article?_format=json",
+        ]
+
+        try:
+            async with httpx.AsyncClient(
+                verify=False,
+                timeout=self.timeout,
+                follow_redirects=True,
+                headers=DEFAULT_HEADERS,
+            ) as client:
+                for test_url in test_urls:
+                    try:
+                        response = await client.get(test_url)
+                        if response.status_code == 200:
+                            content_type = response.headers.get("content-type", "").lower()
+                            if "json" in content_type:
+                                logger.info("Drupal API found", domain=domain, endpoint=test_url)
+                                return {
+                                    "articles": "/jsonapi/node/article",
+                                    "pages": "/jsonapi/node/page",
+                                }
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug("Drupal API test failed", domain=domain, error=str(e))
 
         return None
 
@@ -275,6 +370,7 @@ class SiteProfiler:
                     verify=False,
                     timeout=5.0,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.head(sitemap_url)
                     if response.status_code == 200:
@@ -310,6 +406,7 @@ class SiteProfiler:
                     verify=False,
                     timeout=5.0,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.head(feed_url)
                     if response.status_code == 200:
@@ -349,6 +446,7 @@ class SiteProfiler:
                     verify=False,
                     timeout=5.0,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.head(page_url)
                     if response.status_code == 200:
@@ -371,6 +469,7 @@ class SiteProfiler:
                     verify=False,
                     timeout=self.timeout,
                     follow_redirects=True,
+                    headers=DEFAULT_HEADERS,
                 ) as client:
                     response = await client.get(rss_url)
                     if response.status_code == 200:
@@ -465,6 +564,7 @@ class SiteProfiler:
                 verify=False,
                 timeout=self.timeout,
                 follow_redirects=True,
+                headers=DEFAULT_HEADERS,
             ) as client:
                 response = await client.get(sample_url)
                 if response.status_code != 200:
@@ -526,6 +626,7 @@ class SiteProfiler:
         except Exception as e:
             logger.debug("Content selector test failed", url=sample_url, error=str(e))
             return None
+
 
 
 

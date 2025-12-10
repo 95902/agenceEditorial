@@ -119,6 +119,7 @@ class TrendPipelineAgent(BaseAgent):
         time_window_days: int = 365,
         skip_llm: bool = False,
         skip_gap_analysis: bool = False,
+        execution_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute the full 4-stage pipeline.
@@ -129,11 +130,12 @@ class TrendPipelineAgent(BaseAgent):
             time_window_days: Time window in days
             skip_llm: Skip LLM enrichment stage
             skip_gap_analysis: Skip gap analysis stage
+            execution_id: Optional execution ID (if provided, uses this instead of generating a new one)
             
         Returns:
             Pipeline execution results
         """
-        execution_id = str(uuid4())
+        execution_id = execution_id or str(uuid4())
         start_time = datetime.now(timezone.utc)
         
         logger.info(
@@ -216,6 +218,27 @@ class TrendPipelineAgent(BaseAgent):
             results["stages"]["temporal"] = stage2_result
             execution.stage_2_temporal_status = "completed"
             await self.db_session.commit()
+            
+            # Save temporal metrics to database
+            if stage2_result.get("metrics"):
+                from python_scripts.database.crud_temporal_metrics import create_topic_temporal_metrics_batch
+                try:
+                    await create_topic_temporal_metrics_batch(
+                        db_session=self.db_session,
+                        metrics_data=stage2_result["metrics"],
+                        analysis_id=execution.id,
+                    )
+                    logger.info(
+                        "Saved temporal metrics to database",
+                        metrics_count=len(stage2_result["metrics"]),
+                        analysis_id=execution.id,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to save temporal metrics",
+                        error=str(e),
+                        analysis_id=execution.id,
+                    )
             
             # STAGE 3: LLM Enrichment
             if not skip_llm:
@@ -433,11 +456,20 @@ class TrendPipelineAgent(BaseAgent):
         recommendations = []
         
         # Process top topics by potential score
+        # Utiliser la config max_topics_to_enrich au lieu du hardcode à 10
+        max_topics = getattr(self.llm_config, "max_topics_to_enrich", 50)
         top_topics = sorted(
             temporal_metrics,
             key=lambda x: x.get("potential_score", 0),
             reverse=True,
-        )[:10]
+        )[:max_topics]
+        
+        logger.info(
+            "Processing topics for LLM enrichment",
+            total_topics=len(temporal_metrics),
+            topics_to_process=len(top_topics),
+            max_topics_config=max_topics,
+        )
         
         for metrics in top_topics:
             topic_id = metrics["topic_id"]
@@ -575,6 +607,28 @@ class TrendPipelineAgent(BaseAgent):
             documents_by_topic=documents_by_topic,
         )
         
+        # Save coverage analysis to database
+        if coverage:
+            from python_scripts.database.crud_coverage import create_client_coverage_analysis_batch
+            try:
+                await create_client_coverage_analysis_batch(
+                    db_session=self.db_session,
+                    client_domain=client_domain,
+                    coverage_data=coverage,
+                    analysis_id=analysis_id,
+                )
+                logger.info(
+                    "Saved client coverage analyses to database",
+                    coverage_count=len(coverage),
+                    analysis_id=analysis_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to save coverage analyses",
+                    error=str(e),
+                    analysis_id=analysis_id,
+                )
+        
         # Identify gaps
         gaps = self._gap_analyzer.identify_gaps(
             coverage_results=coverage,
@@ -613,6 +667,28 @@ class TrendPipelineAgent(BaseAgent):
         
         # Identify strengths
         strengths = self._gap_analyzer.identify_strengths(coverage)
+        
+        # Save client strengths to database
+        if strengths:
+            from python_scripts.database.crud_coverage import create_client_strengths_batch
+            try:
+                await create_client_strengths_batch(
+                    db_session=self.db_session,
+                    client_domain=client_domain,
+                    strengths_data=strengths,
+                    analysis_id=analysis_id,
+                )
+                logger.info(
+                    "Saved client strengths to database",
+                    strengths_count=len(strengths),
+                    analysis_id=analysis_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to save client strengths",
+                    error=str(e),
+                    analysis_id=analysis_id,
+                )
         
         # Build roadmap
         roadmap = self._gap_analyzer.build_roadmap(

@@ -214,30 +214,54 @@ class GapAnalyzer:
         recommendations: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """
-        Build prioritized content roadmap.
+        Build prioritized content roadmap with diversified efforts.
         
         Args:
             gaps: Prioritized gaps
             recommendations: Article recommendations
             
         Returns:
-            Content roadmap items
+            Content roadmap items with varied effort levels
         """
         roadmap = []
         distribution = self.config.priority_distribution
         
-        # Match recommendations to gaps
+        # Get effort distribution config (default if not set)
+        effort_distribution = getattr(self.config, "effort_distribution", {
+            "easy": 0.30,
+            "medium": 0.45,
+            "complex": 0.25,
+        })
+        
+        # Match recommendations to gaps - organize by effort level
         reco_by_topic = {}
+        reco_by_effort = {"easy": [], "medium": [], "complex": []}
+        
         for reco in recommendations:
             topic_id = reco.get("topic_cluster_id") or reco.get("topic_id")
             if topic_id not in reco_by_topic:
                 reco_by_topic[topic_id] = []
             reco_by_topic[topic_id].append(reco)
+            
+            # Also track by effort level
+            effort = reco.get("effort_level", "medium")
+            if effort not in reco_by_effort:
+                effort = "medium"
+            reco_by_effort[effort].append(reco)
         
         priority_order = 1
         high_count = 0
         medium_count = 0
         low_count = 0
+        
+        # Track effort counts for diversification
+        effort_counts = {"easy": 0, "medium": 0, "complex": 0}
+        max_items = self.config.max_roadmap_items
+        effort_targets = {
+            "easy": int(max_items * effort_distribution.get("easy", 0.30)),
+            "medium": int(max_items * effort_distribution.get("medium", 0.45)),
+            "complex": int(max_items * effort_distribution.get("complex", 0.25)),
+        }
         
         for gap in gaps:
             topic_id = gap["topic_id"]
@@ -259,8 +283,16 @@ class GapAnalyzer:
             else:
                 continue
             
-            # Add best recommendation for this gap
-            best_reco = topic_recos[0]
+            # Select recommendation with effort diversification
+            # Prioritize effort levels that are below target
+            best_reco = self._select_reco_with_effort_balance(
+                topic_recos,
+                effort_counts,
+                effort_targets,
+            )
+            
+            effort = best_reco.get("effort_level", "medium")
+            effort_counts[effort] = effort_counts.get(effort, 0) + 1
             
             roadmap.append({
                 "priority_order": priority_order,
@@ -269,7 +301,7 @@ class GapAnalyzer:
                 "gap_label": gap["topic_label"],
                 "recommendation_title": best_reco.get("title", ""),
                 "recommendation_id": best_reco.get("id"),
-                "estimated_effort": best_reco.get("effort_level", "medium"),
+                "estimated_effort": effort,
                 "gap_priority_score": gap["priority_score"],
             })
             
@@ -284,9 +316,55 @@ class GapAnalyzer:
             high=high_count,
             medium=medium_count,
             low=low_count,
+            effort_distribution=effort_counts,
         )
         
         return roadmap
+    
+    def _select_reco_with_effort_balance(
+        self,
+        recommendations: List[Dict[str, Any]],
+        current_counts: Dict[str, int],
+        targets: Dict[str, int],
+    ) -> Dict[str, Any]:
+        """
+        Select a recommendation that helps balance effort distribution.
+        
+        Args:
+            recommendations: Available recommendations for this topic
+            current_counts: Current counts by effort level
+            targets: Target counts by effort level
+            
+        Returns:
+            Selected recommendation
+        """
+        if not recommendations:
+            return {}
+        
+        # Group by effort level
+        by_effort = {"easy": [], "medium": [], "complex": []}
+        for reco in recommendations:
+            effort = reco.get("effort_level", "medium")
+            if effort not in by_effort:
+                effort = "medium"
+            by_effort[effort].append(reco)
+        
+        # Prioritize effort levels that are furthest below target
+        effort_gaps = {}
+        for effort, target in targets.items():
+            current = current_counts.get(effort, 0)
+            effort_gaps[effort] = target - current
+        
+        # Sort efforts by gap (descending - most needed first)
+        sorted_efforts = sorted(effort_gaps.keys(), key=lambda e: effort_gaps[e], reverse=True)
+        
+        # Select from most needed effort level that has recommendations
+        for effort in sorted_efforts:
+            if by_effort.get(effort):
+                return by_effort[effort][0]
+        
+        # Fallback: return first recommendation
+        return recommendations[0]
     
     def _calculate_priority_score(
         self,

@@ -26,12 +26,20 @@ class GapAnalysisConfig:
     # Strength thresholds
     strength_significant_threshold: float = 1.5  # Client 50%+ more than avg competitor
     
-    # Roadmap settings
-    max_roadmap_items: int = 20
+    # Roadmap settings - augmenté de 20 à 25 pour plus de recommandations
+    max_roadmap_items: int = 25
     priority_distribution: Dict[str, int] = field(default_factory=lambda: {
-        "high": 5,
+        "high": 7,    # Augmenté de 5 à 7
         "medium": 10,
-        "low": 5,
+        "low": 8,     # Augmenté de 5 à 8
+    })
+    
+    # Effort distribution for roadmap items
+    # Objectif: diversifier les niveaux d'effort pour avoir des quick wins
+    effort_distribution: Dict[str, float] = field(default_factory=lambda: {
+        "easy": 0.30,     # 30% d'actions faciles (quick wins)
+        "medium": 0.45,   # 45% d'actions moyennes
+        "complex": 0.25,  # 25% d'actions complexes
     })
     
     @classmethod

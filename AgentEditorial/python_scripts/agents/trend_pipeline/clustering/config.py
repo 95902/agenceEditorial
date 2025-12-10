@@ -8,8 +8,10 @@ from typing import List, Optional
 class HDBSCANConfig:
     """HDBSCAN clustering configuration."""
     
-    min_cluster_size: int = 5
-    min_samples: int = 3
+    # Augmenté de 5 à 12 pour éviter les clusters géants
+    # Recommandation: 10-15 pour un corpus de taille moyenne
+    min_cluster_size: int = 12
+    min_samples: int = 5  # Augmenté de 3 à 5 pour plus de stabilité
     metric: str = "euclidean"
     cluster_selection_method: str = "eom"  # excess of mass
     cluster_selection_epsilon: float = 0.1
@@ -31,7 +33,8 @@ class UMAPConfig:
 class BERTopicConfig:
     """BERTopic model configuration."""
     
-    min_topic_size: int = 10
+    # Augmenté de 10 à 15 pour éviter les micro-clusters
+    min_topic_size: int = 15
     nr_topics: str | int = "auto"
     calculate_probabilities: bool = True
     verbose: bool = True
@@ -89,13 +92,26 @@ class ClusteringConfig:
         """Configuration optimized for small corpus (<500 articles)."""
         return cls(
             hdbscan=HDBSCANConfig(
-                min_cluster_size=3,
-                min_samples=2,
+                min_cluster_size=5,
+                min_samples=3,
             ),
             bertopic=BERTopicConfig(
-                min_topic_size=5,
+                min_topic_size=8,
             ),
             min_articles=20,
+        )
+    
+    @classmethod
+    def for_medium_corpus(cls) -> "ClusteringConfig":
+        """Configuration optimized for medium corpus (500-5000 articles)."""
+        return cls(
+            hdbscan=HDBSCANConfig(
+                min_cluster_size=12,
+                min_samples=5,
+            ),
+            bertopic=BERTopicConfig(
+                min_topic_size=15,
+            ),
         )
     
     @classmethod
@@ -103,15 +119,15 @@ class ClusteringConfig:
         """Configuration optimized for large corpus (>5000 articles)."""
         return cls(
             hdbscan=HDBSCANConfig(
-                min_cluster_size=10,
-                min_samples=5,
+                min_cluster_size=20,
+                min_samples=8,
             ),
             umap=UMAPConfig(
                 n_neighbors=30,
                 n_components=15,
             ),
             bertopic=BERTopicConfig(
-                min_topic_size=20,
+                min_topic_size=30,
                 low_memory=True,
             ),
         )

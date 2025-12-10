@@ -32,6 +32,11 @@ class LLMEnrichmentConfig:
     max_synthesis_length: int = 500
     max_outlier_clusters_to_analyze: int = 10
     
+    # Topics enrichment limits
+    # Augmenté de 10 à 50 pour enrichir plus de clusters
+    # Valeur précédente était hardcodée à 10 dans agent.py
+    max_topics_to_enrich: int = 50
+    
     # Quality scoring
     min_quality_score: float = 0.6
     
