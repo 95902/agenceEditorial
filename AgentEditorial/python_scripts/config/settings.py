@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     # Default to 11435 if using Docker Compose (to avoid conflict with local Ollama on 11434)
     # Set OLLAMA_BASE_URL=http://localhost:11434 in .env if using local Ollama
     ollama_base_url: str = "http://localhost:11435"
+    # Default model for article generation / LLM-based features
+    # Utilise un modèle plus standard déjà utilisé ailleurs dans le projet
+    ollama_model: str = "llama3:8b"
 
     # API Keys (optional)
     tavily_api_key: Optional[str] = None
@@ -83,6 +86,26 @@ class Settings(BaseSettings):
     # Output Paths
     output_base_path: str = "/mnt/user-data/outputs"
     visualizations_path: str = "/mnt/user-data/outputs/visualizations"
+
+    # Article Generation Output Paths
+    # Base directory for generated article files (markdown, html, metadata)
+    article_output_dir: str = "outputs/articles"
+    # Directory for generated images associated with articles
+    article_images_dir: str = "outputs/articles/images"
+
+    # Z-Image configuration
+    # Enable/disable image generation (can be disabled in environments without GPU)
+    z_image_enabled: bool = True
+    # Image generation model to use (z-image-turbo, z-image-base, flux-schnell)
+    # Note: z-image-turbo is the default (lighter than FLUX, requires transformers >= 4.47.0)
+    z_image_model: str = "z-image-turbo"
+
+    # Ideogram API configuration
+    ideogram_api_key: Optional[str] = None
+    ideogram_model: str = "V_2"  # V_2 ou V_2_TURBO
+    ideogram_default_style: str = "DESIGN"  # DESIGN, ILLUSTRATION, REALISTIC, GENERAL
+    image_provider: str = "ideogram"  # "ideogram" ou "local"
+    image_fallback_to_local: bool = False  # Fallback vers Z-Image si API Ideogram échoue
 
 
 # Global settings instance
