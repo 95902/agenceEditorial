@@ -296,3 +296,8 @@ async def get_client_strengths_by_domain(
     
     result = await db_session.execute(query)
     return list(result.scalars().all())
+
+
+
+
+

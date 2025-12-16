@@ -212,3 +212,8 @@ async def get_temporal_metrics_by_analysis(
         .order_by(TopicTemporalMetrics.window_start.desc())
     )
     return list(result.scalars().all())
+
+
+
+
+

@@ -66,3 +66,8 @@ def downgrade() -> None:
     op.create_index(op.f('ix_bertopic_analysis_analysis_date'), 'bertopic_analysis', ['analysis_date'], unique=False)
     op.create_index(op.f('ix_bertopic_analysis_created_at'), 'bertopic_analysis', ['created_at'], unique=False)
 
+
+
+
+
+
