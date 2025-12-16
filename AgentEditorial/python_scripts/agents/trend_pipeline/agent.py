@@ -18,6 +18,9 @@ from python_scripts.database.crud_clusters import (
 )
 from python_scripts.database.models import TrendPipelineExecution
 from python_scripts.utils.logging import get_logger
+from python_scripts.analysis.article_enrichment.topic_filters import (
+    classify_topic_label,
+)
 
 logger = get_logger(__name__)
 
@@ -356,9 +359,18 @@ class TrendPipelineAgent(BaseAgent):
         for cluster in clusters:
             cluster["document_ids"] = {
                 "indices": cluster.get("document_indices", []),
-                "ids": [document_ids[i] for i in cluster.get("document_indices", []) if i < len(document_ids)],
+                "ids": [
+                    document_ids[i]
+                    for i in cluster.get("document_indices", [])
+                    if i < len(document_ids)
+                ],
             }
             cluster["top_terms"] = {"terms": cluster.get("top_terms", [])}
+
+            # Classify topic scope (core / adjacent / off_scope)
+            label = cluster.get("label", "") or ""
+            scope = classify_topic_label(label)
+            cluster["scope"] = scope
         
         # Process outliers
         outliers = self._outlier_handler.extract_outliers(

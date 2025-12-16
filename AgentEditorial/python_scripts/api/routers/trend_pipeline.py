@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,11 @@ from python_scripts.agents.trend_pipeline.agent import TrendPipelineAgent
 from python_scripts.api.dependencies import get_db_session as get_db
 from python_scripts.api.schemas.responses import ExecutionResponse
 from python_scripts.utils.logging import get_logger
+from python_scripts.analysis.article_enrichment.topic_filters import (
+    classify_topic_label,
+    is_major_topic,
+    filter_by_scope,
+)
 
 logger = get_logger(__name__)
 
@@ -148,6 +153,24 @@ class TrendSynthesisSummary(BaseModel):
     saturated_angles: Optional[List[str]] = None
     opportunities: Optional[List[str]] = None
     llm_model_used: str
+
+
+class OutlierSummary(BaseModel):
+    """Summary of an outlier (article not in any cluster)."""
+    document_id: str
+    article_id: Optional[int] = None
+    domain: Optional[str] = None
+    title: Optional[str] = None
+    url: Optional[str] = None
+    potential_category: Optional[str] = None
+    embedding_distance: Optional[float] = None
+
+
+class OutliersResponse(BaseModel):
+    """Response schema for outliers."""
+    execution_id: str
+    outliers: List[OutlierSummary]
+    total: int
 
 
 class ArticleRecommendationSummary(BaseModel):
@@ -526,6 +549,9 @@ async def get_pipeline_status(
 async def get_pipeline_clusters(
     execution_id: str,
     db: AsyncSession = Depends(get_db),
+    min_size: int = Query(1, ge=1, description="Minimum cluster size to include"),
+    min_coherence: float = Query(0.0, ge=0.0, le=1.0, description="Minimum coherence score"),
+    scope: str = Query("all", regex="^(all|core|adjacent|off_scope)$", description="Filter by topic scope"),
 ) -> ClustersResponse:
     """
     Get topic clusters from a pipeline execution.
@@ -533,9 +559,17 @@ async def get_pipeline_clusters(
     Returns all topic clusters discovered during Stage 1 (Clustering) of the trend pipeline.
     Each cluster represents a group of semantically similar articles.
     
+    Query parameters allow filtering by:
+    - min_size: Minimum number of articles in cluster (default: 1)
+    - min_coherence: Minimum coherence score (default: 0.0)
+    - scope: Filter by topic category: "all" (default), "core", "adjacent", "off_scope"
+    
     Args:
         execution_id: Pipeline execution ID
         db: Database session
+        min_size: Minimum cluster size
+        min_coherence: Minimum coherence score
+        scope: Topic scope filter
         
     Returns:
         List of topic clusters with labels, sizes, and top terms
@@ -545,7 +579,11 @@ async def get_pipeline_clusters(
         
     Example:
         ```bash
+        # Get all clusters
         curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/clusters"
+        
+        # Get major clusters (size >= 20, core topics only)
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/clusters?min_size=20&scope=core"
         ```
     """
     from python_scripts.database.crud_clusters import get_topic_clusters_by_analysis
@@ -566,18 +604,34 @@ async def get_pipeline_clusters(
             detail=f"Execution {execution_id} not found",
         )
     
-    # Get clusters
-    clusters = await get_topic_clusters_by_analysis(db, execution.id)
+    # Get clusters (optionally filtered by scope at DB level)
+    scope_filter = None if scope == "all" else scope
+    clusters = await get_topic_clusters_by_analysis(
+        db,
+        execution.id,
+        scope=scope_filter,
+        only_valid=True,
+    )
     
+    # Build summaries and apply size/coherence filter
     cluster_summaries = [
         ClusterSummary(
             topic_id=c.topic_id,
             label=c.label,
             size=c.size,
             coherence_score=float(c.coherence_score) if c.coherence_score else None,
-            top_terms=[t["word"] for t in (c.top_terms.get("terms", []) if c.top_terms else [])[:5]],
+            top_terms=[
+                t["word"]
+                for t in (c.top_terms.get("terms", []) if c.top_terms else [])[:5]
+            ],
         )
         for c in clusters
+        if is_major_topic(
+            c.size,
+            float(c.coherence_score) if c.coherence_score else None,
+            min_size,
+            min_coherence,
+        )
     ]
     
     return ClustersResponse(
@@ -621,6 +675,8 @@ async def get_pipeline_clusters(
 async def get_pipeline_gaps(
     execution_id: str,
     db: AsyncSession = Depends(get_db),
+    scope: str = Query("all", regex="^(all|core|adjacent|off_scope)$", description="Filter by topic scope"),
+    top_n: Optional[int] = Query(None, ge=1, description="Limit to top N gaps by priority"),
 ) -> GapsResponse:
     """
     Get editorial gaps from a pipeline execution.
@@ -628,9 +684,15 @@ async def get_pipeline_gaps(
     Returns content gaps identified during Stage 4 (Gap Analysis) of the trend pipeline.
     Gaps represent topics where competitors have more coverage than the client.
     
+    Query parameters allow filtering by:
+    - scope: Filter by topic category: "all" (default), "core", "adjacent", "off_scope"
+    - top_n: Limit to top N gaps by priority score
+    
     Args:
         execution_id: Pipeline execution ID
         db: Database session
+        scope: Topic scope filter
+        top_n: Limit results to top N
         
     Returns:
         List of editorial gaps with priority scores and diagnostics
@@ -640,7 +702,11 @@ async def get_pipeline_gaps(
         
     Example:
         ```bash
+        # Get all gaps
         curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/gaps"
+        
+        # Get top 10 core gaps
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/gaps?scope=core&top_n=10"
         ```
     """
     from sqlalchemy import select
@@ -661,13 +727,18 @@ async def get_pipeline_gaps(
         )
     
     # Get gaps (we need to join with topic_clusters for labels)
+    conditions = [TopicCluster.analysis_id == execution.id]
+    if scope != "all":
+        conditions.append(TopicCluster.scope == scope)
+    
     result = await db.execute(
-        select(EditorialGap, TopicCluster).join(
+        select(EditorialGap, TopicCluster)
+        .join(
             TopicCluster,
-            EditorialGap.topic_cluster_id == TopicCluster.id
-        ).where(
-            TopicCluster.analysis_id == execution.id
-        ).order_by(EditorialGap.priority_score.desc())
+            EditorialGap.topic_cluster_id == TopicCluster.id,
+        )
+        .where(*conditions)
+        .order_by(EditorialGap.priority_score.desc())
     )
     
     gap_summaries = []
@@ -679,6 +750,10 @@ async def get_pipeline_gaps(
             priority_score=float(gap.priority_score),
             diagnostic=gap.diagnostic,
         ))
+    
+    # Apply top_n limit
+    if top_n:
+        gap_summaries = gap_summaries[:top_n]
     
     return GapsResponse(
         execution_id=execution_id,
@@ -721,6 +796,8 @@ async def get_pipeline_gaps(
 async def get_pipeline_roadmap(
     execution_id: str,
     db: AsyncSession = Depends(get_db),
+    scope: str = Query("all", regex="^(all|core|adjacent|off_scope)$", description="Filter by topic scope"),
+    max_effort: Optional[str] = Query(None, regex="^(easy|medium)$", description="Max effort level (easy/medium for quick wins)"),
 ) -> RoadmapResponse:
     """
     Get content roadmap from a pipeline execution.
@@ -728,9 +805,15 @@ async def get_pipeline_roadmap(
     Returns a prioritized content roadmap generated during Stage 4 (Gap Analysis).
     The roadmap links editorial gaps to article recommendations, ordered by priority.
     
+    Query parameters allow filtering by:
+    - scope: Filter by topic category: "all" (default), "core", "adjacent", "off_scope"
+    - max_effort: Filter by max effort level: "easy" or "medium" (excludes "complex")
+    
     Args:
         execution_id: Pipeline execution ID
         db: Database session
+        scope: Topic scope filter
+        max_effort: Max effort level filter
         
     Returns:
         Prioritized content roadmap with article recommendations
@@ -740,7 +823,11 @@ async def get_pipeline_roadmap(
         
     Example:
         ```bash
+        # Get all roadmap items
         curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/roadmap"
+        
+        # Get core topics with easy/medium effort (quick wins)
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/roadmap?scope=core&max_effort=medium"
         ```
     """
     from sqlalchemy import select
@@ -764,19 +851,26 @@ async def get_pipeline_roadmap(
         )
     
     # Get roadmap items
+    conditions = [ContentRoadmap.client_domain == execution.client_domain]
+    if scope != "all":
+        conditions.append(TopicCluster.scope == scope)
+    
     result = await db.execute(
-        select(ContentRoadmap, EditorialGap, TopicCluster, ArticleRecommendation).join(
+        select(ContentRoadmap, EditorialGap, TopicCluster, ArticleRecommendation)
+        .join(
             EditorialGap,
-            ContentRoadmap.gap_id == EditorialGap.id
-        ).join(
+            ContentRoadmap.gap_id == EditorialGap.id,
+        )
+        .join(
             TopicCluster,
-            EditorialGap.topic_cluster_id == TopicCluster.id
-        ).join(
+            EditorialGap.topic_cluster_id == TopicCluster.id,
+        )
+        .join(
             ArticleRecommendation,
-            ContentRoadmap.recommendation_id == ArticleRecommendation.id
-        ).where(
-            ContentRoadmap.client_domain == execution.client_domain
-        ).order_by(ContentRoadmap.priority_order)
+            ContentRoadmap.recommendation_id == ArticleRecommendation.id,
+        )
+        .where(*conditions)
+        .order_by(ContentRoadmap.priority_order)
     )
     
     roadmap_items = []
@@ -789,10 +883,33 @@ async def get_pipeline_roadmap(
             estimated_effort=roadmap.estimated_effort,
         ))
     
+    # Filter by max_effort
+    if max_effort:
+        effort_order = {"easy": 0, "medium": 1, "complex": 2}
+        max_effort_level = effort_order.get(max_effort, 2)
+        filtered_roadmap_source = [
+            r for r in roadmap_items
+            if effort_order.get(r.estimated_effort, 2) <= max_effort_level
+        ]
+    else:
+        filtered_roadmap_source = roadmap_items
+    
+    # Convert back to RoadmapItem
+    filtered_roadmap = [
+        RoadmapItem(
+            priority_order=r.priority_order,
+            priority_tier=r.priority_tier,
+            gap_label=r.gap_label,
+            recommendation_title=r.recommendation_title,
+            estimated_effort=r.estimated_effort,
+        )
+        for r in filtered_roadmap_source
+    ]
+    
     return RoadmapResponse(
         execution_id=execution_id,
-        roadmap=roadmap_items,
-        total=len(roadmap_items),
+        roadmap=filtered_roadmap,
+        total=len(filtered_roadmap),
     )
 
 
@@ -837,6 +954,8 @@ async def get_pipeline_roadmap(
 async def get_pipeline_llm_results(
     execution_id: str,
     db: AsyncSession = Depends(get_db),
+    scope: str = Query("all", regex="^(all|core|adjacent|off_scope)$", description="Filter by topic scope"),
+    min_differentiation: float = Query(0.0, ge=0.0, le=1.0, description="Minimum differentiation score for recommendations"),
 ) -> LLMResultsResponse:
     """
     Get LLM enrichment results from a pipeline execution.
@@ -847,9 +966,15 @@ async def get_pipeline_llm_results(
     - Article recommendations: Suggested article titles, hooks, and outlines
     - Opportunities: Identified content opportunities per topic
     
+    Query parameters allow filtering by:
+    - scope: Filter by topic category: "all" (default), "core", "adjacent", "off_scope"
+    - min_differentiation: Minimum differentiation score for recommendations (0.0-1.0)
+    
     Args:
         execution_id: Pipeline execution ID
         db: Database session
+        scope: Topic scope filter
+        min_differentiation: Minimum differentiation score
         
     Returns:
         LLM enrichment results with trend analyses and recommendations
@@ -859,7 +984,11 @@ async def get_pipeline_llm_results(
         
     Example:
         ```bash
+        # Get all LLM results
         curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/llm-results"
+        
+        # Get core topics with highly differentiated recommendations
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/llm-results?scope=core&min_differentiation=0.7"
         ```
     """
     from sqlalchemy import select
@@ -891,32 +1020,44 @@ async def get_pipeline_llm_results(
     # Get article recommendations
     article_recommendations = await get_article_recommendations_by_analysis(db, execution.id)
     
-    # Build syntheses summaries
+    # Build syntheses summaries (filtered by scope if provided)
     syntheses = []
     for ta in trend_analyses:
-        # Get topic cluster for label
+        # Get topic cluster for label and scope
         cluster_result = await db.execute(
             select(TopicCluster).where(TopicCluster.id == ta.topic_cluster_id)
         )
         cluster = cluster_result.scalar_one_or_none()
+
+        if scope != "all" and cluster and cluster.scope != scope:
+            continue
         
-        syntheses.append(TrendSynthesisSummary(
-            topic_id=cluster.topic_id if cluster else -1,
-            topic_label=cluster.label if cluster else "Unknown",
-            synthesis=ta.synthesis,
-            saturated_angles=ta.saturated_angles if isinstance(ta.saturated_angles, list) else None,
-            opportunities=ta.opportunities if isinstance(ta.opportunities, list) else None,
-            llm_model_used=ta.llm_model_used,
-        ))
+        syntheses.append(
+            TrendSynthesisSummary(
+                topic_id=cluster.topic_id if cluster else -1,
+                topic_label=cluster.label if cluster else "Unknown",
+                synthesis=ta.synthesis,
+                saturated_angles=ta.saturated_angles
+                if isinstance(ta.saturated_angles, list)
+                else None,
+                opportunities=ta.opportunities
+                if isinstance(ta.opportunities, list)
+                else None,
+                llm_model_used=ta.llm_model_used,
+            )
+        )
     
-    # Build recommendations summaries
+    # Build recommendations summaries (filtered by scope and differentiation)
     recommendations = []
     for ar in article_recommendations:
-        # Get topic cluster for label
+        # Get topic cluster for label and scope
         cluster_result = await db.execute(
             select(TopicCluster).where(TopicCluster.id == ar.topic_cluster_id)
         )
         cluster = cluster_result.scalar_one_or_none()
+
+        if scope != "all" and cluster and cluster.scope != scope:
+            continue
         
         # Normalize outline: convert list to dict if needed
         outline = ar.outline
@@ -927,22 +1068,172 @@ async def get_pipeline_llm_results(
             # Fallback: wrap in dict
             outline = {"content": outline}
         
-        recommendations.append(ArticleRecommendationSummary(
-            id=ar.id,
-            topic_id=cluster.topic_id if cluster else -1,
-            topic_label=cluster.label if cluster else "Unknown",
-            title=ar.title,
-            hook=ar.hook,
-            outline=outline,
-            effort_level=ar.effort_level,
-            differentiation_score=float(ar.differentiation_score) if ar.differentiation_score else None,
-        ))
+        # Apply differentiation filter
+        diff_score = float(ar.differentiation_score) if ar.differentiation_score else 0.0
+        if diff_score < min_differentiation:
+            continue
+
+        recommendations.append(
+            ArticleRecommendationSummary(
+                id=ar.id,
+                topic_id=cluster.topic_id if cluster else -1,
+                topic_label=cluster.label if cluster else "Unknown",
+                title=ar.title,
+                hook=ar.hook,
+                outline=outline,
+                effort_level=ar.effort_level,
+                differentiation_score=diff_score,
+            )
+        )
+    
+    filtered_syntheses = syntheses
+    filtered_recommendations = recommendations
     
     return LLMResultsResponse(
         execution_id=execution_id,
-        syntheses=syntheses,
-        recommendations=recommendations,
-        total_syntheses=len(syntheses),
-        total_recommendations=len(recommendations),
+        syntheses=filtered_syntheses,
+        recommendations=filtered_recommendations,
+        total_syntheses=len(filtered_syntheses),
+        total_recommendations=len(filtered_recommendations),
+    )
+
+
+@router.get(
+    "/{execution_id}/outliers",
+    response_model=OutliersResponse,
+    summary="Get outlier articles",
+    description="Get articles that were not assigned to any topic cluster (outliers).",
+    responses={
+        200: {
+            "description": "Outliers retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "execution_id": "123e4567-e89b-12d3-a456-426614174000",
+                        "outliers": [
+                            {
+                                "document_id": "doc_123",
+                                "article_id": 456,
+                                "domain": "example.com",
+                                "title": "Off-topic article",
+                                "url": "https://example.com/article",
+                                "potential_category": "hospitality",
+                                "embedding_distance": 0.85
+                            }
+                        ],
+                        "total": 15
+                    }
+                }
+            }
+        },
+        404: {
+            "description": "Execution not found"
+        }
+    },
+)
+async def get_pipeline_outliers(
+    execution_id: str,
+    db: AsyncSession = Depends(get_db),
+    max_distance: Optional[float] = Query(None, ge=0.0, le=1.0, description="Maximum embedding distance to include"),
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of outliers to return"),
+    domain: Optional[str] = Query(None, description="Filter by domain"),
+) -> OutliersResponse:
+    """
+    Get outlier articles from a pipeline execution.
+    
+    Returns articles that were not assigned to any topic cluster during Stage 1 (Clustering).
+    These articles may be off-topic or too dissimilar from any cluster centroid.
+    
+    Outliers are sorted by embedding distance (descending), so the most "distant" articles appear first.
+    
+    Query parameters allow filtering by:
+    - max_distance: Maximum embedding distance to include (0.0-1.0)
+    - limit: Maximum number of outliers to return
+    - domain: Filter by article domain
+    
+    Args:
+        execution_id: Pipeline execution ID
+        db: Database session
+        max_distance: Maximum embedding distance
+        limit: Maximum number of results
+        domain: Domain filter
+        
+    Returns:
+        List of outlier articles with metadata
+        
+    Raises:
+        HTTPException: 404 if execution not found
+        
+    Example:
+        ```bash
+        # Get all outliers
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/outliers"
+        
+        # Get top 20 most distant outliers
+        curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/outliers?limit=20"
+        ```
+    """
+    from sqlalchemy import select
+    from python_scripts.database.models import TrendPipelineExecution, ScrapedArticle
+    from python_scripts.database.crud_clusters import get_outliers_by_analysis
+    
+    # Get execution
+    result = await db.execute(
+        select(TrendPipelineExecution).where(
+            TrendPipelineExecution.execution_id == execution_id
+        )
+    )
+    execution = result.scalar_one_or_none()
+    
+    if not execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution {execution_id} not found",
+        )
+    
+    # Get outliers
+    outliers = await get_outliers_by_analysis(db, execution.id, limit=limit)
+    
+    # Build outlier summaries with article metadata
+    outlier_summaries = []
+    for outlier in outliers:
+        # Apply max_distance filter
+        if max_distance is not None and outlier.embedding_distance and outlier.embedding_distance > max_distance:
+            continue
+        
+        # Get article metadata if article_id is available
+        article_domain = None
+        article_title = None
+        article_url = None
+        
+        if outlier.article_id:
+            article_result = await db.execute(
+                select(ScrapedArticle).where(ScrapedArticle.id == outlier.article_id)
+            )
+            article = article_result.scalar_one_or_none()
+            
+            if article:
+                article_domain = article.domain
+                article_title = article.title
+                article_url = article.url
+        
+        # Apply domain filter
+        if domain and article_domain != domain:
+            continue
+        
+        outlier_summaries.append(OutlierSummary(
+            document_id=outlier.document_id,
+            article_id=outlier.article_id,
+            domain=article_domain,
+            title=article_title,
+            url=article_url,
+            potential_category=outlier.potential_category,
+            embedding_distance=float(outlier.embedding_distance) if outlier.embedding_distance else None,
+        ))
+    
+    return OutliersResponse(
+        execution_id=execution_id,
+        outliers=outlier_summaries,
+        total=len(outlier_summaries),
     )
 
