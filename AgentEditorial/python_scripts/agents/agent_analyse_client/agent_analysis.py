@@ -2,7 +2,7 @@
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from python_scripts.agents.base_agent import BaseAgent
 from python_scripts.agents.prompts import (
@@ -100,6 +100,22 @@ def fix_json_common_issues(json_text: str) -> str:
     # Fix single quotes to double quotes (basic, be careful)
     # Only replace single quotes that are clearly string delimiters
     json_text = re.sub(r"'([^']*)':", r'"\1":', json_text)
+    
+    # Fix unquoted property names (e.g., { key: value } -> { "key": value })
+    # This handles cases where keys are not quoted at all
+    json_text = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_text)
+    
+    # Fix escaped quotes in strings (sometimes LLMs double-escape)
+    # But be careful not to break valid escaped quotes
+    # Only fix if we see \\" which suggests double-escaping
+    json_text = re.sub(r'\\\\"', '\\"', json_text)
+    
+    # Remove comments (JSON doesn't support comments)
+    json_text = re.sub(r'//.*?$', '', json_text, flags=re.MULTILINE)
+    json_text = re.sub(r'/\*.*?\*/', '', json_text, flags=re.DOTALL)
+    
+    # Fix trailing commas in objects and arrays (more comprehensive)
+    json_text = re.sub(r',(\s*[}\]])', r'\1', json_text)
 
     return json_text
 
@@ -424,33 +440,54 @@ class EditorialAnalysisAgent(BaseAgent):
 
     async def synthesize_analyses(
         self,
-        llama3_result: Dict[str, Any],
-        mistral_result: Dict[str, Any],
-        phi3_result: Dict[str, Any],
+        llama3_result: Optional[Dict[str, Any]],
+        mistral_result: Optional[Dict[str, Any]],
+        phi3_result: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """
         Synthesize multiple LLM analyses into unified profile.
+        Now handles None results gracefully.
 
         Args:
-            llama3_result: Llama3 analysis results
-            mistral_result: Mistral analysis results
-            phi3_result: Phi3 analysis results
+            llama3_result: Llama3 analysis results (can be None)
+            mistral_result: Mistral analysis results (can be None)
+            phi3_result: Phi3 analysis results (can be None)
 
         Returns:
             Synthesized editorial profile
 
         Raises:
-            LLMError: If synthesis fails
+            LLMError: If synthesis fails and no valid results available
         """
+        # Filter out None results
+        valid_results = []
+        if llama3_result:
+            valid_results.append(("llama3", llama3_result))
+        if mistral_result:
+            valid_results.append(("mistral", mistral_result))
+        if phi3_result:
+            valid_results.append(("phi3", phi3_result))
+        
+        if not valid_results:
+            raise ValueError("No valid LLM results to synthesize")
+        
+        # If only one result, return it directly (no need for synthesis)
+        if len(valid_results) == 1:
+            logger.warning(
+                "Only one LLM result available, using it directly",
+                model=valid_results[0][0],
+            )
+            return valid_results[0][1]
+        
         try:
             # Use Llama3 for synthesis (best for complex reasoning)
             llm = get_llama3_llm(temperature=0.5)  # Lower temperature for more consistent synthesis
 
-            # Format prompt
+            # Format prompt with available results
             prompt = EDITORIAL_SYNTHESIS_PROMPT.format(
-                llama3_analysis=json.dumps(llama3_result, indent=2),
-                mistral_analysis=json.dumps(mistral_result, indent=2),
-                phi3_analysis=json.dumps(phi3_result, indent=2),
+                llama3_analysis=json.dumps(llama3_result, indent=2) if llama3_result else "{}",
+                mistral_analysis=json.dumps(mistral_result, indent=2) if mistral_result else "{}",
+                phi3_analysis=json.dumps(phi3_result, indent=2) if phi3_result else "{}",
             )
 
             # Invoke LLM
@@ -502,35 +539,36 @@ class EditorialAnalysisAgent(BaseAgent):
 
     def _manual_merge(
         self,
-        llama3_result: Dict[str, Any],
-        mistral_result: Dict[str, Any],
-        phi3_result: Dict[str, Any],
+        llama3_result: Optional[Dict[str, Any]],
+        mistral_result: Optional[Dict[str, Any]],
+        phi3_result: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """
         Manually merge LLM results as fallback.
+        Now handles None results gracefully.
 
         Args:
-            llama3_result: Llama3 analysis results
-            mistral_result: Mistral analysis results
-            phi3_result: Phi3 analysis results (contains detailed activity_domains)
+            llama3_result: Llama3 analysis results (can be None)
+            mistral_result: Mistral analysis results (can be None)
+            phi3_result: Phi3 analysis results (contains detailed activity_domains, can be None)
 
         Returns:
             Merged editorial profile
         """
         # Use phi3's activity_domains as they are more detailed
-        activity_domains = phi3_result.get("activity_domains", {})
+        activity_domains = phi3_result.get("activity_domains", {}) if phi3_result else {}
         # Fallback to llama3 if phi3 doesn't have activity_domains
-        if not activity_domains:
+        if not activity_domains and llama3_result:
             activity_domains = llama3_result.get("activity_domains", {})
         
         return {
-            "language_level": llama3_result.get("language_level", "intermediate"),
-            "editorial_tone": llama3_result.get("editorial_tone", "professional"),
-            "target_audience": llama3_result.get("target_audience", {}),
+            "language_level": (llama3_result or {}).get("language_level", "intermediate"),
+            "editorial_tone": (llama3_result or {}).get("editorial_tone", "professional"),
+            "target_audience": (llama3_result or {}).get("target_audience", {}),
             "activity_domains": activity_domains,  # Use phi3's detailed domains
-            "content_structure": mistral_result.get("content_structure", {}),
-            "keywords": phi3_result.get("keywords", {}),
-            "style_features": llama3_result.get("style_features", {}),
+            "content_structure": (mistral_result or {}).get("content_structure", {}),
+            "keywords": (phi3_result or {}).get("keywords", {}),
+            "style_features": (llama3_result or {}).get("style_features", {}),
         }
 
     async def execute(
@@ -544,11 +582,11 @@ class EditorialAnalysisAgent(BaseAgent):
 
         Args:
             execution_id: Execution ID (UUID)
-            input_data: Input data containing 'content' (combined text from pages)
-            **kwargs: Additional arguments
+            input_data: Input data containing 'content' (combined text from pages) - required
+            **kwargs: Additional arguments (reserved for future use)
 
         Returns:
-            Complete editorial profile
+            Complete editorial profile as dictionary
         """
         content = input_data.get("content", "")
         if not content:
@@ -556,50 +594,106 @@ class EditorialAnalysisAgent(BaseAgent):
 
         self.log_step("analysis_start", "running", "Starting multi-LLM analysis")
 
-        # Run analyses in parallel (if possible) or sequentially
+        # Run analyses with error tolerance - continue even if one fails
+        results = {}
+        errors = {}
+        
+        # Analyze with Llama3
         try:
-            # Analyze with Llama3
             llama3_result = await self.analyze_with_llm(
                 content,
                 "llama3:8b",
                 EDITORIAL_ANALYSIS_PROMPT_LLAMA3,
             )
+            results["llama3:8b"] = llama3_result
+        except Exception as e:
+            logger.warning(
+                "Llama3 analysis failed, continuing with other models",
+                error=str(e),
+                execution_id=str(execution_id),
+            )
+            errors["llama3:8b"] = str(e)
+            results["llama3:8b"] = None
 
-            # Analyze with Mistral
+        # Analyze with Mistral
+        try:
             mistral_result = await self.analyze_with_llm(
                 content,
                 "mistral:7b",
                 EDITORIAL_ANALYSIS_PROMPT_MISTRAL,
             )
+            results["mistral:7b"] = mistral_result
+        except Exception as e:
+            logger.warning(
+                "Mistral analysis failed, continuing with other models",
+                error=str(e),
+                execution_id=str(execution_id),
+            )
+            errors["mistral:7b"] = str(e)
+            results["mistral:7b"] = None
 
-            # Analyze with Phi3
+        # Analyze with Phi3
+        try:
             phi3_result = await self.analyze_with_llm(
                 content,
                 "phi3:medium",
                 EDITORIAL_ANALYSIS_PROMPT_PHI3,
             )
-
-            # Synthesize results
-            synthesized = await self.synthesize_analyses(llama3_result, mistral_result, phi3_result)
-
-            # Add metadata
-            synthesized["llm_models_used"] = {
-                "llama3:8b": True,
-                "mistral:7b": True,
-                "phi3:medium": True,
-            }
-            synthesized["individual_analyses"] = {
-                "llama3": llama3_result,
-                "mistral": mistral_result,
-                "phi3": phi3_result,
-            }
-
-            self.log_step("analysis_complete", "completed", "Multi-LLM analysis complete")
-            return synthesized
-
+            results["phi3:medium"] = phi3_result
         except Exception as e:
-            self.log_step("analysis_failed", "failed", f"Analysis failed: {e}")
-            raise
+            logger.warning(
+                "Phi3 analysis failed, continuing with other models",
+                error=str(e),
+                execution_id=str(execution_id),
+            )
+            errors["phi3:medium"] = str(e)
+            results["phi3:medium"] = None
+
+        # Check if we have at least one successful result
+        successful_results = {k: v for k, v in results.items() if v is not None}
+        if not successful_results:
+            error_msg = "All LLM analyses failed. No results available."
+            logger.error(error_msg, errors=errors, execution_id=str(execution_id))
+            self.log_step("analysis_failed", "failed", error_msg)
+            raise LLMError(error_msg)
+
+        # Synthesize results (handle missing models)
+        synthesized = await self.synthesize_analyses(
+            results.get("llama3:8b"),
+            results.get("mistral:7b"),
+            results.get("phi3:medium"),
+        )
+
+        # Add metadata
+        synthesized["llm_models_used"] = {
+            "llama3:8b": results.get("llama3:8b") is not None,
+            "mistral:7b": results.get("mistral:7b") is not None,
+            "phi3:medium": results.get("phi3:medium") is not None,
+        }
+        
+        # Only include successful analyses in individual_analyses
+        individual_analyses = {}
+        if results.get("llama3:8b"):
+            individual_analyses["llama3"] = results["llama3:8b"]
+        if results.get("mistral:7b"):
+            individual_analyses["mistral"] = results["mistral:7b"]
+        if results.get("phi3:medium"):
+            individual_analyses["phi3"] = results["phi3:medium"]
+        synthesized["individual_analyses"] = individual_analyses
+        
+        # Add error information if any
+        if errors:
+            synthesized["llm_errors"] = errors
+            synthesized["partial_analysis"] = True
+            logger.warning(
+                "Partial analysis completed",
+                successful_models=list(successful_results.keys()),
+                failed_models=list(errors.keys()),
+                execution_id=str(execution_id),
+            )
+
+        self.log_step("analysis_complete", "completed", "Multi-LLM analysis complete")
+        return synthesized
 
 
 
