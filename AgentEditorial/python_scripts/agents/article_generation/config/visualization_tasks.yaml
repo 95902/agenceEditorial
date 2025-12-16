@@ -1,0 +1,8 @@
+tasks:
+  - id: "generate_images"
+    description: "Proposer et générer les visuels clés (cover, illustrations) pour accompagner l'article."
+    expected_output: "Liste de prompts + chemins des fichiers images générées."
+
+
+
+
