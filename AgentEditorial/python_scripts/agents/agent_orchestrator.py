@@ -118,12 +118,33 @@ class EditorialAnalysisOrchestrator:
                 step_name=step_name,
                 details=details,
             )
-        except Exception as e:
-            self.logger.warning(
-                "Failed to create audit error log",
-                error=str(e),
-                original_error=str(error),
-            )
+        except (RuntimeError, Exception) as e:
+            # If session is invalid, try to create a new session for logging
+            if "session is invalid" in str(e) or "connection" in str(e).lower():
+                try:
+                    from python_scripts.database.db_session import AsyncSessionLocal
+                    async with AsyncSessionLocal() as new_session:
+                        await create_audit_log_from_exception(
+                            db_session=new_session,
+                            action=action,
+                            exception=error,
+                            execution_id=self._current_execution_id,
+                            agent_name=self.AGENT_NAME,
+                            step_name=step_name,
+                            details=details,
+                        )
+                except Exception as retry_error:
+                    self.logger.warning(
+                        "Failed to create audit error log even with new session",
+                        error=str(retry_error),
+                        original_error=str(error),
+                    )
+            else:
+                self.logger.warning(
+                    "Failed to create audit error log",
+                    error=str(e),
+                    original_error=str(error),
+                )
 
     async def _record_metric(
         self,
@@ -145,12 +166,33 @@ class EditorialAnalysisOrchestrator:
                 agent_name=self.AGENT_NAME,
                 additional_data=additional_data,
             )
-        except Exception as e:
-            self.logger.warning(
-                "Failed to record performance metric",
-                error=str(e),
-                metric_type=metric_type,
-            )
+        except (RuntimeError, Exception) as e:
+            # If session is invalid, try to create a new session for logging
+            if "session is invalid" in str(e) or "connection" in str(e).lower():
+                try:
+                    from python_scripts.database.db_session import AsyncSessionLocal
+                    async with AsyncSessionLocal() as new_session:
+                        await create_performance_metric(
+                            db_session=new_session,
+                            execution_id=self._current_execution_id,
+                            metric_type=metric_type,
+                            metric_value=metric_value,
+                            metric_unit=metric_unit,
+                            agent_name=self.AGENT_NAME,
+                            additional_data=additional_data,
+                        )
+                except Exception as retry_error:
+                    self.logger.warning(
+                        "Failed to record performance metric even with new session",
+                        error=str(retry_error),
+                        metric_type=metric_type,
+                    )
+            else:
+                self.logger.warning(
+                    "Failed to record performance metric",
+                    error=str(e),
+                    metric_type=metric_type,
+                )
 
     async def _record_step_metrics(
         self,
@@ -227,6 +269,8 @@ class EditorialAnalysisOrchestrator:
         domain: str,
         max_pages: int = 50,
         execution_id: Optional[UUID] = None,
+        generate_image: bool = False,
+        image_style: str = "corporate_flat",
     ) -> Dict[str, Any]:
         """
         Run complete editorial analysis workflow with full traceability.
@@ -235,6 +279,8 @@ class EditorialAnalysisOrchestrator:
             domain: Domain to analyze
             max_pages: Maximum pages to crawl
             execution_id: Optional execution ID (if None, creates new)
+            generate_image: If True, generate an editorial image after analysis
+            image_style: Style for image generation (corporate_flat, corporate_3d, tech_isometric, etc.)
 
         Returns:
             Workflow execution result
@@ -361,7 +407,10 @@ class EditorialAnalysisOrchestrator:
             
             analysis_result = await self.analysis_agent.execute(
                 execution_id,
-                {"content": combined_content},
+                {
+                    "content": combined_content,
+                    "domain": domain,
+                },
             )
             
             analyzing_duration = self._get_step_duration("analyzing")
@@ -385,6 +434,100 @@ class EditorialAnalysisOrchestrator:
                     domain,
                     analysis_date=datetime.now(timezone.utc),
                 )
+            
+            # Step 5b: Generate image if requested (after site_profile is created)
+            if generate_image:
+                try:
+                    from python_scripts.agents.agent_image_generation import generate_article_image
+                    from python_scripts.database.crud_images import save_image_generation
+                    
+                    await self._log_audit("step_start", "info", "Generating editorial image", step_name="image_generation")
+                    await self._send_progress(execution_id, "generating_image", 88, "Generating editorial image...")
+                    
+                    # Generate image using the synthesized profile
+                    image_result = await generate_article_image(
+                        site_profile=analysis_result,  # Use the synthesized profile
+                        article_topic=domain,  # Use domain as topic
+                        style=image_style,
+                        max_retries=3,
+                    )
+                    
+                    # Extract Ideogram metadata from generation_params if available
+                    generation_params = image_result.generation_params or {}
+                    provider = generation_params.get("provider", "ideogram")
+                    ideogram_url = generation_params.get("ideogram_url")
+                    magic_prompt = generation_params.get("magic_prompt")
+                    style_type = generation_params.get("style_type")
+                    aspect_ratio = generation_params.get("aspect_ratio")
+
+                    # Save to database (note: article_id=None means it won't be saved due to FK constraint)
+                    saved_image = await save_image_generation(
+                        db=self.db_session,
+                        site_profile_id=site_profile.id,
+                        article_topic=domain,
+                        prompt_used=image_result.prompt_used,
+                        output_path=str(image_result.image_path),
+                        generation_params=generation_params,
+                        quality_score=image_result.quality_score,
+                        negative_prompt=image_result.negative_prompt,
+                        critique_details=image_result.critique_details,
+                        retry_count=image_result.retry_count,
+                        final_status=image_result.final_status,
+                        generation_time_seconds=None,
+                        article_id=None,  # Pas d'article associé pour l'instant
+                        provider=provider,
+                        ideogram_url=ideogram_url,
+                        magic_prompt=magic_prompt,
+                        style_type=style_type,
+                        aspect_ratio=aspect_ratio,
+                    )
+                    
+                    await self.db_session.commit()
+                    
+                    # Add image info to analysis result
+                    # Note: saved_image may be None if article_id is None (FK constraint)
+                    image_info = {
+                        "image_path": str(image_result.image_path),
+                        "quality_score": image_result.quality_score,
+                        "final_status": image_result.final_status,
+                        "retry_count": image_result.retry_count,
+                    }
+                    if saved_image is not None:
+                        image_info["image_id"] = saved_image.id
+                    
+                    analysis_result["image_generation"] = image_info
+                    
+                    if saved_image is not None:
+                        logger.info(
+                            "Image generation completed and saved",
+                            image_id=saved_image.id,
+                            site_profile_id=site_profile.id,
+                            execution_id=str(execution_id),
+                        )
+                    else:
+                        logger.info(
+                            "Image generation completed (not saved to DB: no article_id)",
+                            image_path=str(image_result.image_path),
+                            site_profile_id=site_profile.id,
+                            execution_id=str(execution_id),
+                        )
+                    
+                    await self._log_audit("step_complete", "success", "Image generated successfully", step_name="image_generation")
+                    
+                except Exception as image_error:
+                    logger.error(
+                        "Image generation failed",
+                        error=str(image_error),
+                        execution_id=str(execution_id),
+                    )
+                    # Don't fail the whole analysis if image generation fails
+                    analysis_result["image_generation"] = {
+                        "error": str(image_error),
+                        "status": "failed",
+                    }
+                    if self.db_session:
+                        await self.db_session.rollback()
+                    await self._log_audit("step_error", "error", f"Image generation failed: {image_error}", step_name="image_generation")
 
             # Step 6: Update site profile with results
             await update_site_profile(
@@ -500,12 +643,34 @@ class EditorialAnalysisOrchestrator:
                 await self._send_progress(
                     execution_id, "error", 0, f"Workflow failed: {error_message}", status="failed"
                 )
-            except Exception as update_error:
-                self.logger.error(
-                    "Failed to update execution status",
-                    execution_id=str(execution_id),
-                    error=str(update_error),
-                )
+            except (RuntimeError, Exception) as update_error:
+                # If session is invalid, try to create a new session for updating
+                if "session is invalid" in str(update_error) or "connection" in str(update_error).lower():
+                    try:
+                        from python_scripts.database.db_session import AsyncSessionLocal
+                        async with AsyncSessionLocal() as new_session:
+                            # Re-fetch execution with new session
+                            execution = await get_workflow_execution(new_session, execution_id)
+                            if execution:
+                                await update_workflow_execution(
+                                    new_session,
+                                    execution,
+                                    status="failed",
+                                    error_message=f"{error_message}\n\nTraceback:\n{error_traceback}",
+                                    was_success=False,
+                                )
+                    except Exception as retry_error:
+                        self.logger.error(
+                            "Failed to update execution status even with new session",
+                            execution_id=str(execution_id),
+                            error=str(retry_error),
+                        )
+                else:
+                    self.logger.error(
+                        "Failed to update execution status",
+                        execution_id=str(execution_id),
+                        error=str(update_error),
+                    )
 
             raise WorkflowError(f"Editorial analysis workflow failed: {e}") from e
         
@@ -696,12 +861,34 @@ class EditorialAnalysisOrchestrator:
                 await self._send_progress(
                     execution_id, "error", 0, f"Workflow failed: {error_message}", status="failed"
                 )
-            except Exception as update_error:
-                self.logger.error(
-                    "Failed to update execution status",
-                    execution_id=str(execution_id),
-                    error=str(update_error),
-                )
+            except (RuntimeError, Exception) as update_error:
+                # If session is invalid, try to create a new session for updating
+                if "session is invalid" in str(update_error) or "connection" in str(update_error).lower():
+                    try:
+                        from python_scripts.database.db_session import AsyncSessionLocal
+                        async with AsyncSessionLocal() as new_session:
+                            # Re-fetch execution with new session
+                            execution = await get_workflow_execution(new_session, execution_id)
+                            if execution:
+                                await update_workflow_execution(
+                                    new_session,
+                                    execution,
+                                    status="failed",
+                                    error_message=f"{error_message}\n\nTraceback:\n{error_traceback}",
+                                    was_success=False,
+                                )
+                    except Exception as retry_error:
+                        self.logger.error(
+                            "Failed to update execution status even with new session",
+                            execution_id=str(execution_id),
+                            error=str(retry_error),
+                        )
+                else:
+                    self.logger.error(
+                        "Failed to update execution status",
+                        execution_id=str(execution_id),
+                        error=str(update_error),
+                    )
 
             raise WorkflowError(f"Competitor search workflow failed: {e}") from e
         
