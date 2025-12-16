@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import DisconnectionError, InterfaceError, OperationalError
 
 from python_scripts.database.models import (
     AuditLog,
@@ -19,6 +20,67 @@ from python_scripts.utils.json_utils import make_json_serializable
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _is_session_valid(session: AsyncSession) -> bool:
+    """
+    Check if a database session is still valid.
+    
+    Args:
+        session: Database session to check
+        
+    Returns:
+        True if session is valid, False otherwise
+    """
+    try:
+        # Check if session is active and bound
+        return session.is_active and session.bind is not None
+    except Exception:
+        return False
+
+
+async def _safe_commit(session: AsyncSession) -> bool:
+    """
+    Safely commit a session, handling connection errors.
+    
+    Args:
+        session: Database session to commit
+        
+    Returns:
+        True if commit succeeded, False otherwise
+    """
+    if not _is_session_valid(session):
+        return False
+    
+    try:
+        await session.commit()
+        return True
+    except (DisconnectionError, InterfaceError, OperationalError) as e:
+        # Check if it's a connection-related error
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist"]):
+            logger.warning("Database connection error during commit", error=str(e))
+            try:
+                if _is_session_valid(session):
+                    await session.rollback()
+            except Exception:
+                pass
+            return False
+        # Re-raise if it's not a connection error
+        raise
+    except Exception as e:
+        error_str = str(e).lower()
+        # Check if it's a connection-related error
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist"]):
+            logger.warning("Database connection error during commit", error=str(e))
+            try:
+                if _is_session_valid(session):
+                    await session.rollback()
+            except Exception:
+                pass
+            return False
+        # Re-raise if it's not a connection error
+        raise
 
 
 # WorkflowExecution CRUD
@@ -43,6 +105,9 @@ async def create_workflow_execution(
     Returns:
         Created WorkflowExecution instance
     """
+    if not _is_session_valid(db_session):
+        raise RuntimeError("Database session is invalid")
+    
     execution = WorkflowExecution(
         execution_id=uuid4(),
         workflow_type=workflow_type,
@@ -51,15 +116,26 @@ async def create_workflow_execution(
         parent_execution_id=parent_execution_id,
         start_time=datetime.now(timezone.utc) if status == "running" else None,
     )
-    db_session.add(execution)
-    await db_session.commit()
-    await db_session.refresh(execution)
-    logger.info(
-        "Workflow execution created",
-        execution_id=str(execution.execution_id),
-        workflow_type=workflow_type,
-    )
-    return execution
+    try:
+        db_session.add(execution)
+        if not await _safe_commit(db_session):
+            raise RuntimeError("Failed to commit workflow execution")
+        await db_session.refresh(execution)
+        logger.info(
+            "Workflow execution created",
+            execution_id=str(execution.execution_id),
+            workflow_type=workflow_type,
+        )
+        return execution
+    except (DisconnectionError, InterfaceError, OperationalError, RuntimeError) as e:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist", "session is invalid"]):
+            logger.error(
+                "Database connection error while creating workflow execution",
+                workflow_type=workflow_type,
+                error=str(e),
+            )
+        raise
 
 
 async def get_workflow_execution(
@@ -127,14 +203,32 @@ async def update_workflow_execution(
     if was_success is not None:
         execution.was_success = was_success
 
-    await db_session.commit()
-    await db_session.refresh(execution)
-    logger.info(
-        "Workflow execution updated",
-        execution_id=str(execution.execution_id),
-        status=execution.status,
-    )
-    return execution
+    if not _is_session_valid(db_session):
+        logger.warning(
+            "Cannot update workflow execution: session is invalid",
+            execution_id=str(execution.execution_id),
+        )
+        raise RuntimeError("Database session is invalid")
+    
+    try:
+        if not await _safe_commit(db_session):
+            raise RuntimeError("Failed to commit workflow execution update")
+        await db_session.refresh(execution)
+        logger.info(
+            "Workflow execution updated",
+            execution_id=str(execution.execution_id),
+            status=execution.status,
+        )
+        return execution
+    except (DisconnectionError, InterfaceError, OperationalError, RuntimeError) as e:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist", "session is invalid"]):
+            logger.error(
+                "Database connection error while updating workflow execution",
+                execution_id=str(execution.execution_id),
+                error=str(e),
+            )
+        raise
 
 
 # SiteAnalysisResult CRUD
@@ -169,6 +263,9 @@ async def create_site_analysis_result(
     # Normalize phase_results to ensure all JSON strings are parsed
     normalized_results = normalize_json_dict(phase_results) if isinstance(phase_results, dict) else phase_results
     
+    if not _is_session_valid(db_session):
+        raise RuntimeError("Database session is invalid")
+    
     result = SiteAnalysisResult(
         site_profile_id=site_profile_id,
         execution_id=execution_id,
@@ -177,16 +274,28 @@ async def create_site_analysis_result(
         llm_model_used=llm_model_used,
         processing_time_seconds=processing_time_seconds,
     )
-    db_session.add(result)
-    await db_session.commit()
-    await db_session.refresh(result)
-    logger.info(
-        "Site analysis result created",
-        site_profile_id=site_profile_id,
-        execution_id=str(execution_id),
-        phase=analysis_phase,
-    )
-    return result
+    try:
+        db_session.add(result)
+        if not await _safe_commit(db_session):
+            raise RuntimeError("Failed to commit site analysis result")
+        await db_session.refresh(result)
+        logger.info(
+            "Site analysis result created",
+            site_profile_id=site_profile_id,
+            execution_id=str(execution_id),
+            phase=analysis_phase,
+        )
+        return result
+    except (DisconnectionError, InterfaceError, OperationalError, RuntimeError) as e:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist", "session is invalid"]):
+            logger.error(
+                "Database connection error while creating site analysis result",
+                site_profile_id=site_profile_id,
+                execution_id=str(execution_id),
+                error=str(e),
+            )
+        raise
 
 
 async def get_analysis_results_by_execution(
@@ -278,16 +387,43 @@ async def create_audit_log(
         error_traceback=error_traceback,
         timestamp=datetime.now(timezone.utc),
     )
-    db_session.add(audit_log)
-    await db_session.commit()
-    await db_session.refresh(audit_log)
-    logger.debug(
-        "Audit log created",
-        action=action,
-        status=status,
-        execution_id=str(execution_id) if execution_id else None,
-    )
-    return audit_log
+    
+    if not _is_session_valid(db_session):
+        logger.warning(
+            "Cannot create audit log: session is invalid",
+            action=action,
+            execution_id=str(execution_id) if execution_id else None,
+        )
+        raise RuntimeError("Database session is invalid")
+    
+    try:
+        db_session.add(audit_log)
+        if not await _safe_commit(db_session):
+            raise RuntimeError("Failed to commit audit log")
+        await db_session.refresh(audit_log)
+        logger.debug(
+            "Audit log created",
+            action=action,
+            status=status,
+            execution_id=str(execution_id) if execution_id else None,
+        )
+        return audit_log
+    except (DisconnectionError, InterfaceError) as e:
+        logger.warning(
+            "Database connection error while creating audit log",
+            action=action,
+            error=str(e),
+            execution_id=str(execution_id) if execution_id else None,
+        )
+        raise
+    except Exception as e:
+        logger.error(
+            "Error creating audit log",
+            action=action,
+            error=str(e),
+            execution_id=str(execution_id) if execution_id else None,
+        )
+        raise
 
 
 async def create_audit_log_from_exception(
@@ -410,6 +546,14 @@ async def create_performance_metric(
     Returns:
         Created PerformanceMetric instance
     """
+    if not _is_session_valid(db_session):
+        logger.warning(
+            "Cannot create performance metric: session is invalid",
+            execution_id=str(execution_id),
+            metric_type=metric_type,
+        )
+        raise RuntimeError("Database session is invalid")
+    
     metric = PerformanceMetric(
         execution_id=execution_id,
         agent_name=agent_name,
@@ -418,16 +562,33 @@ async def create_performance_metric(
         metric_unit=metric_unit,
         additional_data=make_json_serializable(additional_data) if additional_data else None,
     )
-    db_session.add(metric)
-    await db_session.commit()
-    await db_session.refresh(metric)
-    logger.debug(
-        "Performance metric created",
-        execution_id=str(execution_id),
-        metric_type=metric_type,
-        metric_value=metric_value,
-    )
-    return metric
+    try:
+        db_session.add(metric)
+        if not await _safe_commit(db_session):
+            logger.warning(
+                "Failed to commit performance metric",
+                execution_id=str(execution_id),
+                metric_type=metric_type,
+            )
+            raise RuntimeError("Failed to commit performance metric")
+        await db_session.refresh(metric)
+        logger.debug(
+            "Performance metric created",
+            execution_id=str(execution_id),
+            metric_type=metric_type,
+            metric_value=metric_value,
+        )
+        return metric
+    except (DisconnectionError, InterfaceError, OperationalError, RuntimeError) as e:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist", "session is invalid"]):
+            logger.warning(
+                "Database connection error while creating performance metric",
+                execution_id=str(execution_id),
+                metric_type=metric_type,
+                error=str(e),
+            )
+        raise
 
 
 async def create_performance_metrics_batch(
@@ -448,6 +609,13 @@ async def create_performance_metrics_batch(
     Returns:
         List of created PerformanceMetric instances
     """
+    if not _is_session_valid(db_session):
+        logger.warning(
+            "Cannot create performance metrics batch: session is invalid",
+            execution_id=str(execution_id),
+        )
+        raise RuntimeError("Database session is invalid")
+    
     created_metrics = []
     for m in metrics:
         metric = PerformanceMetric(
@@ -461,16 +629,31 @@ async def create_performance_metrics_batch(
         db_session.add(metric)
         created_metrics.append(metric)
     
-    await db_session.commit()
-    for metric in created_metrics:
-        await db_session.refresh(metric)
-    
-    logger.debug(
-        "Performance metrics batch created",
-        execution_id=str(execution_id),
-        count=len(created_metrics),
-    )
-    return created_metrics
+    try:
+        if not await _safe_commit(db_session):
+            logger.warning(
+                "Failed to commit performance metrics batch",
+                execution_id=str(execution_id),
+            )
+            raise RuntimeError("Failed to commit performance metrics batch")
+        for metric in created_metrics:
+            await db_session.refresh(metric)
+        
+        logger.debug(
+            "Performance metrics batch created",
+            execution_id=str(execution_id),
+            count=len(created_metrics),
+        )
+        return created_metrics
+    except (DisconnectionError, InterfaceError, OperationalError, RuntimeError) as e:
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["connection", "closed", "disconnected", "does not exist", "session is invalid"]):
+            logger.warning(
+                "Database connection error while creating performance metrics batch",
+                execution_id=str(execution_id),
+                error=str(e),
+            )
+        raise
 
 
 async def get_performance_metrics_by_execution(
