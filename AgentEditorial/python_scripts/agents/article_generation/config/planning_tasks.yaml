@@ -1,0 +1,8 @@
+tasks:
+  - id: "planning_outline"
+    description: "Générer un plan détaillé d'article (H1, H2, H3) à partir du sujet, des mots-clés et du contexte client."
+    expected_output: "JSON avec titre, chapitres, sous-parties et objectifs par section."
+
+
+
+

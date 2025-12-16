@@ -1,0 +1,8 @@
+tasks:
+  - id: "draft_article"
+    description: "Rédiger l'article complet en suivant le plan validé, le ton et la longueur cible."
+    expected_output: "Texte markdown structuré avec titres, paragraphes, listes et call-to-actions."
+
+
+
+

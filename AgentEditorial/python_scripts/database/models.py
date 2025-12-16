@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     Boolean,
     Date,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -79,6 +80,15 @@ class SiteProfile(Base, TimestampMixin, SoftDeleteMixin):
         "ClientArticle",
         back_populates="site_profile",
         cascade="all, delete-orphan",
+    )
+    generated_images: Mapped[list["GeneratedImage"]] = relationship(
+        "GeneratedImage",
+        back_populates="site_profile",
+        cascade="all, delete-orphan",
+    )
+    article_images: Mapped[list["GeneratedArticleImage"]] = relationship(
+        "GeneratedArticleImage",
+        back_populates="site_profile",
     )
 
 
@@ -287,6 +297,12 @@ class TopicCluster(Base, SoftDeleteMixin):
     centroid_vector_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     document_ids: Mapped[dict] = mapped_column(JSONB, nullable=False)
     coherence_score: Mapped[Optional[float]] = mapped_column(Numeric(10, 6), nullable=True)
+    # Topic scope according to Innosys classification (core / adjacent / off_scope)
+    scope: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="off_scope",
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         server_default=func.now(),
@@ -594,7 +610,179 @@ class TrendPipelineExecution(Base, SoftDeleteMixin):
     duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
 
-# 18. crawl_cache
+# 18. generated_articles (Article generation workflow)
+class GeneratedArticle(Base, TimestampMixin, SoftDeleteMixin):
+    """Generated article produced by the article generation pipeline."""
+
+    __tablename__ = "generated_articles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    plan_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        unique=True,
+        nullable=False,
+        index=True,
+        default=uuid4,
+    )
+    site_profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("site_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Generation parameters
+    topic: Mapped[str] = mapped_column(String(500), nullable=False)
+    keywords: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    tone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, default="professional")
+    target_words: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
+    language: Mapped[str] = mapped_column(String(10), nullable=False, default="fr")
+
+    # Status and progress
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="initialized", index=True)
+    current_step: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    progress_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Content
+    plan_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    content_markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    content_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    quality_metrics: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # SEO
+    slug: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    meta_description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    final_word_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    seo_score: Mapped[Optional[float]] = mapped_column(Numeric(10, 6), nullable=True)
+    readability_score: Mapped[Optional[float]] = mapped_column(Numeric(10, 6), nullable=True)
+
+    # Files
+    output_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Timestamps specific to validation
+    validated_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=True,
+    )
+
+    # Relationships
+    site_profile: Mapped[Optional["SiteProfile"]] = relationship("SiteProfile")
+    images: Mapped[list["GeneratedArticleImage"]] = relationship(
+        "GeneratedArticleImage",
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
+    versions: Mapped[list["GeneratedArticleVersion"]] = relationship(
+        "GeneratedArticleVersion",
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
+
+
+class GeneratedArticleImage(Base):
+    """Images generated for a generated article."""
+
+    __tablename__ = "generated_article_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("generated_articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    image_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    negative_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    local_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    alt_text: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    
+    # Paramètres de génération
+    generation_params: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    
+    # Qualité et critique
+    quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    critique_details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    
+    # Retry tracking
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    final_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # "success", "failed", "retry_exhausted"
+    
+    # Performance
+    generation_time_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    
+    # Relation optionnelle avec SiteProfile
+    site_profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("site_profiles.id"),
+        nullable=True,
+        index=True,
+    )
+    
+    # Provider (ideogram ou local)
+    provider: Mapped[str] = mapped_column(String(20), default="ideogram", nullable=False)
+    
+    # Ideogram-specific fields
+    ideogram_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # URL originale Ideogram
+    magic_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # Prompt amélioré par magic_prompt
+    style_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # DESIGN, ILLUSTRATION, REALISTIC, GENERAL
+    aspect_ratio: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # 1:1, 4:3, 16:9, etc.
+    
+    # Variant grouping fields
+    variant_group_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # UUID pour grouper les variantes
+    variant_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1, 2, ou 3
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # True si c'est la variante choisie
+    
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    article: Mapped["GeneratedArticle"] = relationship(
+        "GeneratedArticle",
+        back_populates="images",
+    )
+    site_profile: Mapped[Optional["SiteProfile"]] = relationship(
+        "SiteProfile",
+        back_populates="article_images",
+    )
+
+
+class GeneratedArticleVersion(Base):
+    """Historical version of a generated article."""
+
+    __tablename__ = "generated_article_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("generated_articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    change_description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    article: Mapped["GeneratedArticle"] = relationship(
+        "GeneratedArticle",
+        back_populates="versions",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "version", name="uq_article_version"),
+    )
+
+
+# 19. crawl_cache
 class CrawlCache(Base):
     """Crawl cache model."""
 
@@ -947,4 +1135,70 @@ class ErrorLog(Base):
         Index("idx_error_domain", "domain", "first_occurrence"),
         Index("idx_error_unresolved", "is_resolved", "severity", "first_occurrence"),
     )
+
+
+# 15. generated_images
+class GeneratedImage(Base, TimestampMixin):
+    """Table pour stocker les images générées avec Z-Image."""
+
+    __tablename__ = "generated_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # Identification
+    domain: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    negative_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    prompt_hash: Mapped[str] = mapped_column(
+        String(32), unique=True, index=True, nullable=False
+    )
+
+    # Fichier
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Paramètres de génération
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    steps: Mapped[int] = mapped_column(Integer, nullable=False)
+    guidance_scale: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    seed: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Modèle
+    model_used: Mapped[str] = mapped_column(
+        String(100), default="z-image-turbo", nullable=False
+    )
+    model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Performance
+    generation_time_seconds: Mapped[Optional[float]] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+
+    # Métadonnées
+    image_type: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )  # hero, article, social, etc.
+    tags: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)  # JSON array de tags
+
+    # Relations
+    site_profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("site_profiles.id"), nullable=True
+    )
+    site_profile: Mapped[Optional["SiteProfile"]] = relationship(
+        "SiteProfile", back_populates="generated_images"
+    )
+
+    # Index composites pour recherche rapide
+    __table_args__ = (
+        Index("ix_generated_images_domain_created", "domain", "created_at"),
+        Index("ix_generated_images_type_created", "image_type", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<GeneratedImage(id={self.id}, prompt='{self.prompt[:50]}...', "
+            f"model='{self.model_used}')>"
+        )
 

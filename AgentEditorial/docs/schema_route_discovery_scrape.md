@@ -435,3 +435,8 @@ workflow_executions (competitor_search)
 - Découverte multi-sources : API > RSS > Sitemap > Heuristics (ordre de priorité)
 - Cache de profils : Réduit le temps de profilage pour les domaines déjà analysés
 
+
+
+
+
+

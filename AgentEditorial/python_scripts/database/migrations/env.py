@@ -18,6 +18,8 @@ from python_scripts.database.models import (  # noqa: F401
     CrawlCache,
     DiscoveryLog,
     ErrorLog,
+    GeneratedArticleImage,
+    GeneratedImage,
     PerformanceMetric,
     ScrapingPermission,
     SiteAnalysisResult,

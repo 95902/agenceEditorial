@@ -10,6 +10,87 @@ La route `POST /api/v1/trend-pipeline/analyze` lance un pipeline d'analyse de te
 3. **Stage 3 - Enrichissement LLM** : Synthèse de tendances et recommandations d'articles
 4. **Stage 4 - Gap Analysis** : Identification des gaps éditoriaux et roadmap de contenu
 
+## Nouveaux filtres et classification des topics
+
+Depuis la mise à jour récente, tous les endpoints GET du trend-pipeline supportent des **query parameters de filtrage** basés sur une **grille de classification Innosys** :
+
+### Grille de classification des topics
+
+- **`core`** : Topics cœur de cible Innosys (cloud, cybersécurité, data, dev, product management, etc.)
+- **`adjacent`** : Topics adjacents intéressants (accessibilité, design, UX, réglementation numérique, RSE tech, etc.)
+- **`off_scope`** : Topics hors-scope ou faible priorité (hospitalité, régions, comptabilité pure, etc.)
+
+### Filtres disponibles
+
+#### GET `/api/v1/trend-pipeline/{execution_id}/clusters`
+- `min_size` (int, défaut: 1) : Taille minimale du cluster
+- `min_coherence` (float, défaut: 0.0) : Score de cohérence minimum
+- `scope` (string, défaut: "all") : Filtre par catégorie ("all", "core", "adjacent", "off_scope")
+
+**Exemples** :
+```bash
+# Récupérer tous les clusters
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/clusters"
+
+# Récupérer seulement les clusters majeurs (≥20 articles) dans les topics core
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/clusters?min_size=20&scope=core"
+```
+
+#### GET `/api/v1/trend-pipeline/{execution_id}/gaps`
+- `scope` (string, défaut: "all") : Filtre par catégorie
+- `top_n` (int, optionnel) : Limiter aux N premiers gaps par priorité
+
+**Exemples** :
+```bash
+# Récupérer tous les gaps
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/gaps"
+
+# Récupérer les 10 principaux gaps core
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/gaps?scope=core&top_n=10"
+```
+
+#### GET `/api/v1/trend-pipeline/{execution_id}/roadmap`
+- `scope` (string, défaut: "all") : Filtre par catégorie
+- `max_effort` (string, optionnel: "easy" ou "medium") : Filtre les quick wins
+
+**Exemples** :
+```bash
+# Récupérer toute la roadmap
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/roadmap"
+
+# Récupérer les quick wins (easy/medium) sur les topics core
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/roadmap?scope=core&max_effort=medium"
+```
+
+#### GET `/api/v1/trend-pipeline/{execution_id}/llm-results`
+- `scope` (string, défaut: "all") : Filtre par catégorie
+- `min_differentiation` (float, défaut: 0.0) : Score de différenciation minimum pour les recommendations
+
+**Exemples** :
+```bash
+# Récupérer tous les résultats LLM
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/llm-results"
+
+# Récupérer les recommandations core très différenciées
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/llm-results?scope=core&min_differentiation=0.7"
+```
+
+#### GET `/api/v1/trend-pipeline/{execution_id}/outliers` (NOUVEAU)
+- `max_distance` (float, optionnel) : Distance d'embedding maximum à inclure
+- `limit` (int, optionnel) : Nombre maximum d'outliers à retourner
+- `domain` (string, optionnel) : Filtrer par domaine
+
+**Description** : Retourne les articles qui n'ont été assignés à aucun cluster (outliers/hors-sujet).
+
+**Exemples** :
+```bash
+# Récupérer tous les outliers
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/outliers"
+
+# Récupérer les 20 outliers les plus distants
+curl "http://localhost:8000/api/v1/trend-pipeline/{execution_id}/outliers?limit=20"
+```
+
 ## Flux d'exécution
 
 ### Phase initiale : Récupération des domaines
@@ -333,6 +414,7 @@ La route `POST /api/v1/trend-pipeline/analyze` lance un pipeline d'analyse de te
 │ 3. Génération de labels                                         │
 │    - Labels automatiques pour chaque topic                       │
 │    - Calcul de cohérence                                        │
+│    - Classification scope (core / adjacent / off_scope)         │
 │                                                                  │
 │ 4. Extraction d'outliers                                        │
 │    - Documents non classifiés (topic_id=-1)                    │
@@ -496,4 +578,7 @@ workflow_executions (competitor_search)
 - **Minimum d'articles** : Nécessite un minimum d'articles (configurable, défaut: ~50)
 - **Coût LLM** : L'enrichissement LLM peut être coûteux (appels multiples)
 - **Scalabilité** : Le clustering peut être lent avec beaucoup d'articles (>10k)
+
+
+
 

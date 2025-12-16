@@ -116,9 +116,14 @@ async def fetch_pipeline_data(
     endpoints = {
         "status": f"{api_url}/trend-pipeline/{execution_id}/status",
         "clusters": f"{api_url}/trend-pipeline/{execution_id}/clusters",
+        "clusters_core": f"{api_url}/trend-pipeline/{execution_id}/clusters?scope=core&min_size=20",
         "gaps": f"{api_url}/trend-pipeline/{execution_id}/gaps",
+        "gaps_core": f"{api_url}/trend-pipeline/{execution_id}/gaps?scope=core&top_n=10",
         "roadmap": f"{api_url}/trend-pipeline/{execution_id}/roadmap",
+        "roadmap_quick_wins": f"{api_url}/trend-pipeline/{execution_id}/roadmap?scope=core&max_effort=medium",
         "llm_results": f"{api_url}/trend-pipeline/{execution_id}/llm-results",
+        "llm_results_differentiated": f"{api_url}/trend-pipeline/{execution_id}/llm-results?scope=core&min_differentiation=0.7",
+        "outliers": f"{api_url}/trend-pipeline/{execution_id}/outliers?limit=20",
     }
     
     data = {}
@@ -788,6 +793,50 @@ def generate_report(analysis: PipelineAnalysis) -> str:
             "",
         ])
     
+    # Topic distribution by scope
+    clusters_data = analysis.raw_data.get("clusters", {})
+    if clusters_data:
+        from python_scripts.analysis.article_enrichment.topic_filters import get_scope_distribution
+        clusters = clusters_data.get("clusters", [])
+        scope_dist = get_scope_distribution([{"topic_label": c.get("label", "")} for c in clusters])
+        lines.extend([
+            "### Distribution par scope",
+            "",
+            f"- **Core** (topics cœur Innosys): {scope_dist.get('core', 0)}",
+            f"- **Adjacent** (topics intéressants): {scope_dist.get('adjacent', 0)}",
+            f"- **Off-scope** (hors-sujet / faible priorité): {scope_dist.get('off_scope', 0)}",
+            "",
+        ])
+    
+    # Major core topics
+    clusters_core_data = analysis.raw_data.get("clusters_core", {})
+    if clusters_core_data:
+        lines.extend([
+            "### Topics majeurs (core, ≥20 articles)",
+            "",
+            f"Nombre: {clusters_core_data.get('total', 0)}",
+            "",
+        ])
+    
+    # Outliers
+    outliers_data = analysis.raw_data.get("outliers", {})
+    if outliers_data:
+        outliers = outliers_data.get("outliers", [])
+        lines.extend([
+            "### Articles hors-sujet (outliers)",
+            "",
+            f"Total: {outliers_data.get('total', 0)} articles non assignés à un cluster",
+            "",
+            "Top 5 outliers (les plus distants):",
+            "",
+        ])
+        for i, outlier in enumerate(outliers[:5], 1):
+            title = outlier.get("title", "N/A")[:60]
+            domain = outlier.get("domain", "N/A")
+            distance = outlier.get("embedding_distance", 0)
+            lines.append(f"{i}. **{title}** - {domain} (distance: {distance:.3f})")
+        lines.append("")
+    
     # Stages summary
     lines.append("### Status des stages")
     lines.append("")
@@ -978,3 +1027,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+

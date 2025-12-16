@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from python_scripts.config.settings import settings
 from python_scripts.database.models import (
     AuditLog,
-    BertopicAnalysis,
     ClientArticle,
     CompetitorArticle,
     ContentRoadmap,
@@ -16,7 +15,6 @@ from python_scripts.database.models import (
     ClientStrength,
     DiscoveryLog,
     EditorialGap,
-    EditorialTrend,
     ErrorLog,
     ArticleRecommendation,
     PerformanceMetric,
@@ -63,8 +61,6 @@ async def clear_database():
             "topic_temporal_metrics",
             "topic_outliers",
             "topic_clusters",
-            "bertopic_analysis",
-            "editorial_trends",
             "url_discovery_scores",
             "discovery_logs",
             "site_discovery_profiles",
@@ -99,6 +95,8 @@ async def clear_database():
 
 if __name__ == "__main__":
     asyncio.run(clear_database())
+
+
 
 
 

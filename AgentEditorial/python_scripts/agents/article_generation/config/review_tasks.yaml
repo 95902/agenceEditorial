@@ -1,0 +1,8 @@
+tasks:
+  - id: "review_quality"
+    description: "Relire l'article pour vérifier la clarté, la cohérence, le respect du brief et les aspects SEO de base."
+    expected_output: "Liste de suggestions d'amélioration et validation finale oui/non."
+
+
+
+

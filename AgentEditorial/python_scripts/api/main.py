@@ -6,11 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from python_scripts.api.middleware.rate_limit import setup_rate_limiting
 from python_scripts.api.routers import (
     article_enrichment,
+    article_generation,
     competitors,
     discovery,
     errors,
     executions,
     health,
+    images,
     sites,
     trend_pipeline,
 )
@@ -50,6 +52,8 @@ app.include_router(trend_pipeline.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
 app.include_router(errors.router, prefix="/api/v1")
 app.include_router(article_enrichment.router, prefix="/api/v1")
+app.include_router(article_generation.router, prefix="/api/v1")
+app.include_router(images.router, prefix="/api/v1")
 
 
 @app.on_event("startup")

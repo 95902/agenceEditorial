@@ -26,6 +26,7 @@ async def create_topic_cluster(
     document_ids: Dict[str, Any],
     centroid_vector_id: Optional[str] = None,
     coherence_score: Optional[float] = None,
+    scope: Optional[str] = None,
 ) -> TopicCluster:
     """
     Create a new topic cluster.
@@ -40,6 +41,7 @@ async def create_topic_cluster(
         document_ids: List of document IDs
         centroid_vector_id: Qdrant vector ID for centroid
         coherence_score: Cluster coherence score
+        scope: Topic scope (core / adjacent / off_scope)
         
     Returns:
         Created TopicCluster
@@ -53,6 +55,7 @@ async def create_topic_cluster(
         document_ids=document_ids,
         centroid_vector_id=centroid_vector_id,
         coherence_score=coherence_score,
+        scope=scope or "off_scope",
     )
     
     db_session.add(cluster)
@@ -97,6 +100,7 @@ async def create_topic_clusters_batch(
             document_ids=data.get("document_ids", {}),
             centroid_vector_id=data.get("centroid_vector_id"),
             coherence_score=data.get("coherence_score"),
+            scope=data.get("scope", "off_scope"),
         )
         clusters.append(cluster)
     
@@ -141,6 +145,8 @@ async def get_topic_cluster_by_id(
 async def get_topic_clusters_by_analysis(
     db_session: AsyncSession,
     analysis_id: int,
+    scope: Optional[str] = None,
+    only_valid: bool = True,
 ) -> List[TopicCluster]:
     """
     Get all topic clusters for an analysis.
@@ -148,15 +154,22 @@ async def get_topic_clusters_by_analysis(
     Args:
         db_session: Database session
         analysis_id: Pipeline execution ID
+        scope: Optional topic scope filter (core / adjacent / off_scope)
+        only_valid: If True, only return is_valid=True clusters
         
     Returns:
         List of TopicClusters
     """
+    conditions = [TopicCluster.analysis_id == analysis_id]
+    if only_valid:
+        conditions.append(TopicCluster.is_valid == True)  # noqa: E712
+    if scope:
+        conditions.append(TopicCluster.scope == scope)
+
     result = await db_session.execute(
-        select(TopicCluster).where(
-            TopicCluster.analysis_id == analysis_id,
-            TopicCluster.is_valid == True,  # noqa: E712
-        ).order_by(desc(TopicCluster.size))
+        select(TopicCluster)
+        .where(*conditions)
+        .order_by(desc(TopicCluster.size))
     )
     return list(result.scalars().all())
 

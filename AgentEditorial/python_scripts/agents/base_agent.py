@@ -95,6 +95,39 @@ class BaseAgent(ABC):
             details=details or {},
         )
 
+    # ------------------------------------------------------------------
+    # Backwards-compatible helpers used by some agents (including
+    # article_generation.CrewOrchestrator)
+    # ------------------------------------------------------------------
+
+    def log_step_start(
+        self,
+        step_name: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Convenience wrapper to log the start of a step."""
+        self.start_step_timer(step_name)
+        if details:
+            # Also log a structured info event
+            self.log_step(step_name, "started", message, details)
+
+    def log_step_complete(
+        self,
+        step_name: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Convenience wrapper to log the completion of a step."""
+        duration = self.stop_step_timer(step_name, message=message, details=details)
+        self.logger.info(
+            "workflow_step_completed",
+            step=step_name,
+            message=message,
+            duration_seconds=duration,
+            details=details or {},
+        )
+
     def start_step_timer(self, step_name: str) -> None:
         """
         Start a timer for a step (for performance tracking).

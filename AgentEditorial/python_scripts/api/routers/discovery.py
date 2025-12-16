@@ -209,20 +209,23 @@ async def run_enhanced_scraping_background(
     "/scrape",
     response_model=ExecutionResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Enhanced scraping with 4-phase discovery",
+    summary="Enhanced scraping with 4-phase discovery (competitors)",
     description="""
-    Start enhanced scraping with 4-phase discovery pipeline:
+    Start enhanced scraping with 4-phase discovery pipeline.
+
+    This endpoint est principalement conçu pour le **scraping des concurrents**.
     
     1. **Phase 0 - Profiling**: Analyze site structure, detect CMS, APIs, sitemaps, RSS
     2. **Phase 1 - Discovery**: Multi-source discovery (API REST, RSS, sitemaps, heuristics)
     3. **Phase 2 - Scoring**: Probability scoring for each discovered URL
     4. **Phase 3 - Extraction**: Adaptive extraction using site profile
     
-    This endpoint provides better article discovery rates and accuracy compared to standard scraping.
-    
     Supports two modes:
-    - **Direct domains**: Provide 'domains' list directly
+    - **Direct domains**: Provide 'domains' list directly (generic scraping)
     - **Auto-fetch competitors**: Provide 'client_domain' to automatically fetch validated competitors
+    
+    Pour scraper le **site client lui-même** (et créer sa collection Qdrant dédiée),
+    utilisez la route: **POST /api/v1/discovery/client-scrape**.
     """,
 )
 async def enhanced_scrape(
@@ -252,6 +255,20 @@ async def enhanced_scrape(
         Execution response with execution_id
     """
     try:
+        # Safety: when using client_domain, this endpoint is for competitors only.
+        # To scrape the client site itself, there is a dedicated route:
+        # POST /api/v1/discovery/client-scrape
+        if client_domain and is_client_site:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "When using 'client_domain', this endpoint scrapes competitors only. "
+                    "For scraping the client site itself, use "
+                    "'POST /api/v1/discovery/client-scrape' with "
+                    "domain=<client_domain> and site_profile_id=<id>."
+                ),
+            )
+
         domains_to_scrape = []
         current_is_client_site = is_client_site
         
@@ -390,6 +407,134 @@ async def enhanced_scrape(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start enhanced scraping workflow: {e}",
+        )
+
+
+@router.post(
+    "/client-scrape",
+    response_model=ExecutionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Enhanced scraping for client site (4-phase discovery)",
+    description="""
+    Start enhanced scraping workflow specifically for the client site.
+
+    Cette route est dédiée au site client lui-même et crée/alimente une
+    collection Qdrant dédiée de la forme `{domain}_client_articles`.
+
+    1. Phase 0 - Profiling: analyse la structure du site client
+    2. Phase 1 - Discovery: découverte multi-sources (API REST, RSS, sitemaps, heuristiques)
+    3. Phase 2 - Scoring: scoring de probabilité pour chaque URL
+    4. Phase 3 - Extraction: extraction adaptative en utilisant le profil éditorial
+    """,
+)
+async def client_scrape(
+    domain: str = Query(..., description="Client domain to scrape"),
+    site_profile_id: Optional[int] = Query(
+        None,
+        description=(
+            "Site profile ID for the client domain "
+            "(if omitted, it will be looked up by domain)"
+        ),
+    ),
+    max_articles: int = Query(
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum articles to scrape for the client site",
+    ),
+    force_reprofile: bool = Query(
+        False,
+        description="Force reprofiling even if a discovery profile already exists",
+    ),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db),
+) -> ExecutionResponse:
+    """
+    Start enhanced scraping workflow for the client site only.
+
+    This endpoint is responsible for scraping the **client site** lui-même
+    (pas les concurrents) et pour créer/mettre à jour la collection Qdrant
+    dédiée `{domain}_client_articles`.
+
+    Args:
+        domain: Client domain to scrape (e.g. \"innosys.fr\")
+        site_profile_id: Site profile ID for this domain (if None, will be resolved)
+        max_articles: Maximum articles to scrape
+        force_reprofile: Force reprofiling even if profile exists
+        background_tasks: FastAPI background tasks
+        db: Database session
+
+    Returns:
+        Execution response with execution_id
+    """
+    try:
+        # Resolve site_profile_id if not provided
+        resolved_site_profile_id = site_profile_id
+        if resolved_site_profile_id is None:
+            profile = await get_site_profile_by_domain(db, domain)
+            if not profile:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=(
+                        f"Site profile not found for domain: {domain}. "
+                        "Please run editorial analysis first."
+                    ),
+                )
+            resolved_site_profile_id = profile.id
+
+        # Create workflow execution with a dedicated type for client scraping
+        execution = await create_workflow_execution(
+            db,
+            workflow_type="enhanced_scraping_client",
+            input_data={
+                "domains": [domain],
+                "max_articles": max_articles,
+                "is_client_site": True,
+                "site_profile_id": resolved_site_profile_id,
+                "force_reprofile": force_reprofile,
+                "client_domain": None,
+            },
+            status="pending",
+        )
+
+        execution_id = execution.execution_id
+
+        # Start background task
+        background_tasks.add_task(
+            run_enhanced_scraping_background,
+            domains=[domain],
+            max_articles=max_articles,
+            execution_id=execution_id,
+            is_client_site=True,
+            site_profile_id=resolved_site_profile_id,
+            force_reprofile=force_reprofile,
+        )
+
+        logger.info(
+            "Client scraping workflow started",
+            execution_id=str(execution_id),
+            domain=domain,
+            max_articles=max_articles,
+            site_profile_id=resolved_site_profile_id,
+        )
+
+        return ExecutionResponse(
+            execution_id=execution_id,
+            status="pending",
+            start_time=execution.start_time,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "Failed to start client scraping workflow",
+            domain=domain,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start client scraping workflow: {e}",
         )
 
 

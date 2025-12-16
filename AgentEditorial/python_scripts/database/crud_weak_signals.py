@@ -104,3 +104,8 @@ async def get_weak_signals_by_disruption_potential(
     
     result = await db_session.execute(query)
     return list(result.scalars().all())
+
+
+
+
+

@@ -93,3 +93,8 @@ class TestCompleteAPI:
         assert "openapi" in schema
         assert "paths" in schema
 
+
+
+
+
+
