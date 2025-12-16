@@ -58,3 +58,8 @@ class TestWebSocketProgress:
         assert hasattr(websocket_manager, "disconnect")
         assert hasattr(websocket_manager, "send_progress")
 
+
+
+
+
+
