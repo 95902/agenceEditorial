@@ -72,3 +72,4 @@ async def test_image_generation():
 if __name__ == "__main__":
     asyncio.run(test_image_generation())
 
+
