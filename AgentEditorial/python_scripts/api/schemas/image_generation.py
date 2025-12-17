@@ -43,3 +43,4 @@ class ImageGenerationResponse(BaseModel):
     generation_time_seconds: Optional[float] = None
     message: str
 
+
