@@ -230,3 +230,4 @@ class TestImageCritic:
                 assert result.has_unwanted_text is True
                 assert result.scores.no_text == 2
 
+
