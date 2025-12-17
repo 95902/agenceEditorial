@@ -23,6 +23,13 @@ from python_scripts.image_generation.prompt_builder import (
     ImageStyle,
     IdeogramPromptResult,
 )
+from python_scripts.image_generation.prompt_builder_v3 import (
+    AdvancedPromptBuilder,
+    VisualStyle,
+    ITDomain,
+    ImageFormat,
+    AdvancedPromptResult,
+)
 
 
 @dataclass
@@ -79,7 +86,8 @@ class ImageGenerator:
             raise ValueError(f"Invalid provider: {self.provider}. Must be 'ideogram' or 'local'")
 
         self._ideogram_client: Optional[IdeogramClient] = None
-        self._prompt_builder = ImagePromptBuilderV2()
+        self._prompt_builder = ImagePromptBuilderV2()  # Ancien builder pour compatibilité
+        self._advanced_prompt_builder = AdvancedPromptBuilder()  # Nouveau builder avancé
         self._output_dir = Path(settings.article_images_dir or "outputs/images")
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -133,6 +141,7 @@ class ImageGenerator:
         style: str = "corporate_flat",
         aspect_ratio: str = "1:1",
         output_filename: Optional[str] = None,
+        skip_prompt_building: bool = False,  # Si True, utilise le prompt tel quel sans reconstruction
     ) -> GenerationResult:
         """
         Génère une image depuis un prompt.
@@ -143,6 +152,7 @@ class ImageGenerator:
             style: Style visuel (corporate_flat, corporate_3d, etc.)
             aspect_ratio: Ratio d'aspect ("1:1", "4:3", "16:9", etc.)
             output_filename: Nom du fichier de sortie (auto-généré si None)
+            skip_prompt_building: Si True, utilise le prompt tel quel sans reconstruction
 
         Returns:
             GenerationResult avec les détails de la génération
@@ -158,6 +168,7 @@ class ImageGenerator:
                     aspect_ratio=aspect_ratio,
                     output_filename=output_filename,
                     start_time=start_time,
+                    skip_prompt_building=skip_prompt_building,
                 )
             else:  # local
                 return await self._generate_with_local(
@@ -166,6 +177,7 @@ class ImageGenerator:
                     style=style,
                     output_filename=output_filename,
                     start_time=start_time,
+                    skip_prompt_building=skip_prompt_building,
                 )
 
         except Exception as e:
@@ -256,6 +268,12 @@ class ImageGenerator:
         aspect_ratio: str = "1:1",
         output_prefix: Optional[str] = None,
         auto_select: bool = False,
+        # Nouveaux paramètres pour utiliser AdvancedPromptBuilder
+        article_title: Optional[str] = None,
+        content_summary: Optional[str] = None,
+        keywords: Optional[list[str]] = None,
+        site_profile: Optional[dict[str, Any]] = None,
+        use_advanced_builder: bool = True,  # Utiliser le nouveau builder si infos disponibles
     ) -> VariantGenerationResult:
         """
         Génère plusieurs variantes d'une image.
@@ -291,33 +309,90 @@ class ImageGenerator:
                 output_prefix = f"ideogram_image_{prompt_hash}_{timestamp}"
 
             # Construire le prompt optimisé pour Ideogram
-            try:
-                style_enum = ImageStyle(style)
-            except ValueError:
-                logger.warning(f"Unknown style '{style}', using CORPORATE_FLAT")
-                style_enum = ImageStyle.CORPORATE_FLAT
-
-            ideogram_aspect = IDEOGRAM_ASPECT_RATIOS.get(aspect_ratio, "1x1")
-
-            ideogram_prompt_result: IdeogramPromptResult = (
-                self._prompt_builder.build_ideogram_prompt(
-                    subject=prompt,
-                    style=style_enum,
-                    include_negative=negative_prompt is None,
-                    aspect_ratio=ideogram_aspect,
-                )
+            # Utiliser le nouveau builder avancé si on a des infos d'article
+            use_advanced = (
+                use_advanced_builder 
+                and site_profile is not None
+                and (article_title or content_summary or keywords or prompt)
             )
+            
+            if use_advanced:
+                # Utiliser AdvancedPromptBuilder avec détection automatique
+                logger.info("Using AdvancedPromptBuilder for article-based generation")
+                
+                # Convertir aspect_ratio vers ImageFormat
+                format_mapping = {
+                    "1:1": ImageFormat.SOCIAL_SQUARE,
+                    "16:9": ImageFormat.BLOG_HEADER,
+                    "9:16": ImageFormat.SOCIAL_STORY,
+                    "4:3": ImageFormat.THUMBNAIL,
+                }
+                image_format = format_mapping.get(aspect_ratio, ImageFormat.BLOG_HEADER)
+                
+                # Extraire des keywords depuis le prompt si non fournis
+                extracted_keywords = keywords or []
+                if not extracted_keywords and prompt:
+                    # Extraire des mots-clés simples depuis le prompt (mots de 3+ caractères)
+                    extracted_keywords = [
+                        word.strip() 
+                        for word in prompt.split() 
+                        if len(word.strip()) >= 3 and word.strip().isalnum()
+                    ][:5]  # Limiter à 5 mots-clés
+                
+                # Construire le prompt avec le nouveau builder
+                advanced_result: AdvancedPromptResult = (
+                    await self._advanced_prompt_builder.build_from_article(
+                        title=article_title or prompt,
+                        content_summary=content_summary or "",
+                        keywords=extracted_keywords,
+                        site_profile=site_profile,
+                        format=image_format,
+                    )
+                )
+                
+                # Adapter le résultat au format Ideogram
+                ideogram_aspect = advanced_result.aspect_ratio
+                final_prompt = advanced_result.prompt
+                final_negative_prompt = negative_prompt or advanced_result.negative_prompt
+                style_type = advanced_result.style_type
+                
+                logger.info(
+                    "Advanced prompt generated",
+                    domain=advanced_result.metadata.get("domain"),
+                    style=advanced_result.metadata.get("style"),
+                    prompt_length=len(final_prompt),
+                )
+            else:
+                # Utiliser l'ancien builder pour compatibilité
+                try:
+                    style_enum = ImageStyle(style)
+                except ValueError:
+                    logger.warning(f"Unknown style '{style}', using CORPORATE_FLAT")
+                    style_enum = ImageStyle.CORPORATE_FLAT
 
-            final_negative_prompt = negative_prompt or ideogram_prompt_result.negative_prompt
+                ideogram_aspect = IDEOGRAM_ASPECT_RATIOS.get(aspect_ratio, "1x1")
+
+                ideogram_prompt_result: IdeogramPromptResult = (
+                    self._prompt_builder.build_ideogram_prompt(
+                        subject=prompt,
+                        style=style_enum,
+                        include_negative=negative_prompt is None,
+                        aspect_ratio=ideogram_aspect,
+                    )
+                )
+
+                final_prompt = ideogram_prompt_result.prompt
+                final_negative_prompt = negative_prompt or ideogram_prompt_result.negative_prompt
+                style_type = ideogram_prompt_result.style_type
 
             # Générer les variantes en parallèle
             if self.provider == "ideogram":
                 client = self._get_ideogram_client()
                 ideogram_results = await client.generate_variants(
-                    prompt=ideogram_prompt_result.prompt,
+                    prompt=final_prompt,
                     num_variants=num_variants,
                     negative_prompt=final_negative_prompt,
-                    style_type=ideogram_prompt_result.style_type,
+                    style_type=style_type,
                     aspect_ratio=ideogram_aspect,
                     rendering_speed="TURBO",
                     magic_prompt="AUTO",
@@ -341,19 +416,25 @@ class ImageGenerator:
 
                         metadata = {
                             "provider": "ideogram",
-                            "style_type": ideogram_prompt_result.style_type,
+                            "style_type": style_type,
                             "aspect_ratio": aspect_ratio,
                             "resolution": ideogram_result.resolution,
                             "ideogram_url": ideogram_result.url,
                             "magic_prompt": ideogram_result.prompt,
                             "variant_number": variant_number,
                         }
+                        
+                        if use_advanced:
+                            metadata["prompt_builder"] = "advanced_v3"
+                            metadata.update(advanced_result.metadata)
+                        else:
+                            metadata["prompt_builder"] = "legacy_v2"
 
                         variants.append(
                             GenerationResult(
                                 success=True,
                                 image_path=downloaded_path,
-                                prompt_used=ideogram_result.prompt,
+                                prompt_used=ideogram_result.prompt,  # Prompt amélioré par magic_prompt
                                 negative_prompt=final_negative_prompt,
                                 generation_time=ideogram_result.generation_time,
                                 provider="ideogram",
@@ -370,7 +451,7 @@ class ImageGenerator:
                             GenerationResult(
                                 success=False,
                                 image_path=Path(""),
-                                prompt_used=ideogram_prompt_result.prompt,
+                                prompt_used=final_prompt,
                                 negative_prompt=final_negative_prompt,
                                 generation_time=0.0,
                                 provider="ideogram",
@@ -421,7 +502,7 @@ class ImageGenerator:
                     variants=variants,
                     selected_index=selected_index,
                     total_generation_time=total_time,
-                    prompt_used=ideogram_prompt_result.prompt,
+                    prompt_used=final_prompt,
                     variant_group_id=variant_group_id,
                 )
             else:
@@ -458,6 +539,7 @@ class ImageGenerator:
         aspect_ratio: str,
         output_filename: Optional[str],
         start_time: float,
+        skip_prompt_building: bool = False,
     ) -> GenerationResult:
         """Génère une image avec Ideogram."""
         # Vérifier si la clé API est disponible avant de continuer
@@ -467,35 +549,52 @@ class ImageGenerator:
             # Clé API manquante - convertir en IdeogramAPIError pour déclencher le fallback
             raise IdeogramAPIError(f"Missing API key: {str(e)}") from e
         
-        # Convertir le style string en ImageStyle enum
-        try:
-            style_enum = ImageStyle(style)
-        except ValueError:
-            logger.warning(f"Unknown style '{style}', using CORPORATE_FLAT")
-            style_enum = ImageStyle.CORPORATE_FLAT
-
         # Convertir aspect_ratio string en format Ideogram v3 (1x1, 4x3, etc.)
         ideogram_aspect = IDEOGRAM_ASPECT_RATIOS.get(aspect_ratio, "1x1")
 
-        # Construire le prompt optimisé pour Ideogram
-        ideogram_prompt_result: IdeogramPromptResult = (
-            self._prompt_builder.build_ideogram_prompt(
-                subject=prompt,
-                style=style_enum,
-                include_negative=negative_prompt is None,
-                aspect_ratio=ideogram_aspect,
-            )
-        )
+        # Construire le prompt optimisé pour Ideogram (sauf si skip_prompt_building=True)
+        if skip_prompt_building:
+            # Utiliser le prompt tel quel (déjà optimisé par AdvancedPromptBuilder)
+            final_prompt = prompt
+            final_negative_prompt = negative_prompt or "text, words, letters, typography, watermark, signature, blurry, low quality, pixelated, deformed, distorted"
+            # Déterminer le style_type depuis le style string
+            style_type_mapping = {
+                "corporate_flat": "DESIGN",
+                "corporate_3d": "ILLUSTRATION",
+                "tech_isometric": "DESIGN",
+                "tech_gradient": "ILLUSTRATION",
+                "modern_minimal": "DESIGN",
+                "abstract_geometric": "DESIGN",
+            }
+            style_type = style_type_mapping.get(style, "DESIGN")
+        else:
+            # Convertir le style string en ImageStyle enum
+            try:
+                style_enum = ImageStyle(style)
+            except ValueError:
+                logger.warning(f"Unknown style '{style}', using CORPORATE_FLAT")
+                style_enum = ImageStyle.CORPORATE_FLAT
 
-        # Utiliser le negative_prompt fourni ou celui du builder
-        final_negative_prompt = negative_prompt or ideogram_prompt_result.negative_prompt
+            # Construire le prompt optimisé pour Ideogram
+            ideogram_prompt_result: IdeogramPromptResult = (
+                self._prompt_builder.build_ideogram_prompt(
+                    subject=prompt,
+                    style=style_enum,
+                    include_negative=negative_prompt is None,
+                    aspect_ratio=ideogram_aspect,
+                )
+            )
+
+            final_prompt = ideogram_prompt_result.prompt
+            final_negative_prompt = negative_prompt or ideogram_prompt_result.negative_prompt
+            style_type = ideogram_prompt_result.style_type
 
         # Générer l'image avec Ideogram v3
         # Note: v3 n'a plus de paramètre "model", utilise rendering_speed à la place
         ideogram_result = await client.generate(
-            prompt=ideogram_prompt_result.prompt,
+            prompt=final_prompt,
             negative_prompt=final_negative_prompt,
-            style_type=ideogram_prompt_result.style_type,
+            style_type=style_type,
             aspect_ratio=ideogram_aspect,
             rendering_speed="TURBO",  # TURBO pour rapide, STANDARD pour meilleure qualité
             magic_prompt="AUTO",  # Auto-amélioration du prompt
@@ -523,7 +622,7 @@ class ImageGenerator:
             provider="ideogram",
             metadata={
                 "resolution": ideogram_result.resolution,
-                "style_type": ideogram_prompt_result.style_type,
+                "style_type": style_type,
                 "aspect_ratio": aspect_ratio,
                 "rendering_speed": "TURBO",  # v3 utilise rendering_speed au lieu de model
                 "magic_prompt": ideogram_result.prompt,  # Prompt amélioré
@@ -539,20 +638,32 @@ class ImageGenerator:
         style: str,
         output_filename: Optional[str],
         start_time: float,
+        skip_prompt_building: bool = False,
     ) -> GenerationResult:
         """Génère une image avec Z-Image local (fallback)."""
         from python_scripts.image_generation import ZImageGenerator, ImageModel
 
-        # Construire le prompt pour Z-Image
+        # Construire le prompt pour Z-Image (toujours construire pour local, même si skip_prompt_building)
+        # car Z-Image a besoin d'un format spécifique
         try:
             style_enum = ImageStyle(style)
         except ValueError:
             style_enum = ImageStyle.CORPORATE_FLAT
 
-        prompt_result = self._prompt_builder.build_professional_prompt(
-            subject=prompt,
-            style=style_enum,
-        )
+        if skip_prompt_building:
+            # Si le prompt est déjà optimisé, l'utiliser directement mais construire quand même
+            # le format pour Z-Image (qui a besoin de guidance_scale, steps, etc.)
+            prompt_result = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt or "text, words, letters, typography, watermark, signature, blurry, low quality, pixelated, deformed, distorted",
+                "guidance_scale": 7.5,
+                "steps": 12,
+            }
+        else:
+            prompt_result = self._prompt_builder.build_professional_prompt(
+                subject=prompt,
+                style=style_enum,
+            )
 
         # Utiliser le negative_prompt fourni ou celui du builder
         final_negative_prompt = negative_prompt or prompt_result["negative_prompt"]
