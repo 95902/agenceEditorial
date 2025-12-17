@@ -333,16 +333,49 @@ class ImageCritic:
             logger.error("Unexpected error during image critique", error=str(e))
             raise ValueError(f"Image critique failed: {e}") from e
 
-    def should_retry(self, result: CritiqueResult) -> bool:
+    def should_retry(
+        self, 
+        result: CritiqueResult, 
+        attempt: int = 1,
+        min_score_threshold: int = 35,
+        accept_if_essential_ok: bool = True,
+    ) -> bool:
         """
-        Détermine si une nouvelle génération est nécessaire.
-
+        Validation hybride avec seuil adaptatif et critères essentiels.
+        
         Args:
             result: Résultat de l'évaluation
-
+            attempt: Numéro de la tentative (1, 2, 3...)
+            min_score_threshold: Seuil minimum de score total (défaut: 35)
+            accept_if_essential_ok: Si True, accepter si critères essentiels OK même si score bas
+            
         Returns:
             True si une nouvelle génération est recommandée
         """
-        # Retry si score_total < 35 ou verdict = "REGENERER"
-        return result.score_total < 35 or result.verdict == "REGENERER"
+        # Critères absolus : toujours retry
+        if result.has_unwanted_text:
+            return True
+        
+        if result.verdict == "REGENERER":
+            return True
+        
+        # Seuil adaptatif selon la tentative
+        # Tentative 1: min_score_threshold, Tentative 2: -5, Tentative 3+: -10
+        adaptive_threshold = min_score_threshold - (attempt - 1) * 5
+        adaptive_threshold = max(adaptive_threshold, 15)  # Minimum 15/50 (réduit de 20)
+        
+        # Si critères essentiels OK, accepter même avec score légèrement inférieur
+        if accept_if_essential_ok:
+            essential_ok = (
+                result.scores.no_text >= 7 and  # Pas de texte (réduit de 8 à 7)
+                result.scores.professionalism >= 5 and  # Professionnel (réduit de 6 à 5)
+                result.scores.sharpness >= 4  # Netteté acceptable (réduit de 5 à 4)
+            )
+            
+            # Accepter si critères essentiels OK et score proche du seuil (marge augmentée)
+            if essential_ok and result.score_total >= (adaptive_threshold - 8):
+                return False
+        
+        # Validation par score total
+        return result.score_total < adaptive_threshold
 
