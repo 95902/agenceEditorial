@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,11 +238,100 @@ class CrewOrchestrator(BaseAgent):
         await db.commit()
         self.log_step_complete("review", "Review completed")
 
+        # 7. Enregistrer les données d'apprentissage automatiquement
+        try:
+            await self._record_learning_data(
+                db_session=db,
+                article=article,
+                topic=topic,
+                keywords=keywords,
+                tone=tone,
+                target_words=target_words,
+                language=language,
+                quality_metrics={"review": review_result, "research": research_result},
+            )
+        except Exception as learning_error:
+            # Ne pas faire échouer la génération si l'enregistrement d'apprentissage échoue
+            logger.warning(
+                "Failed to record learning data",
+                error=str(learning_error),
+                article_id=article.id,
+            )
+
         return {
             "plan_id": str(article.plan_id),
             "status": "validated",
             "topic": topic,
             "generate_images": generate_images,
         }
+
+    async def _record_learning_data(
+        self,
+        db_session: AsyncSession,
+        article: Any,
+        topic: str,
+        keywords: List[str],
+        tone: str,
+        target_words: int,
+        language: str,
+        quality_metrics: Dict[str, Any],
+    ) -> None:
+        """Enregistre automatiquement les données d'apprentissage après une génération réussie."""
+        from python_scripts.database.crud_article_learning import create_learning_data
+
+        # Extraire le score global pour déterminer si c'est positif
+        global_score = None
+        try:
+            review = quality_metrics.get("review", {})
+            if isinstance(review, dict):
+                raw_review = review.get("raw_review", "")
+                import re
+                match = re.search(r'"global_score":\s*(\d+)', raw_review)
+                if match:
+                    global_score = float(match.group(1))
+        except Exception:
+            pass
+
+        # Considérer comme positif si global_score > 80
+        is_positive = global_score is not None and global_score >= 80.0
+
+        # Construire le prompt utilisé (approximation)
+        prompt_used = (
+            f"Topic: {topic}\n"
+            f"Keywords: {', '.join(keywords)}\n"
+            f"Tone: {tone}\n"
+            f"Target words: {target_words}\n"
+            f"Language: {language}"
+        )
+
+        # Préparer les paramètres de génération
+        generation_params = {
+            "topic": topic,
+            "keywords": keywords,
+            "tone": tone,
+            "target_words": target_words,
+            "language": language,
+        }
+
+        # Créer les données d'apprentissage
+        await create_learning_data(
+            db_session=db_session,
+            article_id=article.id,
+            generation_params=generation_params,
+            prompt_used=prompt_used,
+            quality_scores=quality_metrics,
+            feedback_type="automatic",
+            is_positive=is_positive,
+            site_profile_id=article.site_profile_id,
+        )
+
+        await db_session.commit()
+
+        logger.info(
+            "Learning data recorded",
+            article_id=article.id,
+            is_positive=is_positive,
+            global_score=global_score,
+        )
 
 

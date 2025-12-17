@@ -12,12 +12,14 @@ from alembic import context
 from python_scripts.config.settings import settings
 from python_scripts.database.db_session import Base
 from python_scripts.database.models import (  # noqa: F401
+    ArticleLearningData,
     AuditLog,
     ClientArticle,
     CompetitorArticle,
     CrawlCache,
     DiscoveryLog,
     ErrorLog,
+    GeneratedArticle,
     GeneratedArticleImage,
     GeneratedImage,
     PerformanceMetric,

@@ -678,6 +678,11 @@ class GeneratedArticle(Base, TimestampMixin, SoftDeleteMixin):
         back_populates="article",
         cascade="all, delete-orphan",
     )
+    learning_data: Mapped[list["ArticleLearningData"]] = relationship(
+        "ArticleLearningData",
+        back_populates="article",
+        cascade="all, delete-orphan",
+    )
 
 
 class GeneratedArticleImage(Base):
@@ -1201,4 +1206,48 @@ class GeneratedImage(Base, TimestampMixin):
             f"<GeneratedImage(id={self.id}, prompt='{self.prompt[:50]}...', "
             f"model='{self.model_used}')>"
         )
+
+
+# 19. article_learning_data (Learning system for article generation)
+class ArticleLearningData(Base, TimestampMixin):
+    """Learning data for article generation improvement."""
+
+    __tablename__ = "article_learning_data"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("generated_articles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    site_profile_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("site_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Generation parameters used
+    generation_params: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    prompt_used: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Quality scores
+    quality_scores: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # Feedback
+    feedback_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="automatic"
+    )  # "automatic" ou "manual"
+    is_positive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Learned patterns (filled after analysis)
+    learned_patterns: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # Relationships
+    article: Mapped["GeneratedArticle"] = relationship(
+        "GeneratedArticle",
+        back_populates="learning_data",
+    )
+    site_profile: Mapped[Optional["SiteProfile"]] = relationship("SiteProfile")
 
