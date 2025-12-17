@@ -63,3 +63,4 @@ def downgrade() -> None:
     op.drop_column("generated_article_images", "ideogram_url")
     op.drop_column("generated_article_images", "provider")
 
+

@@ -1,6 +1,7 @@
-"""Script pour vider toutes les tables de la base de données."""
+"""Script pour vider toutes les tables de la base de données et supprimer les images."""
 
 import asyncio
+from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -30,11 +31,15 @@ from python_scripts.database.models import (
     UrlDiscoveryScore,
     WeakSignalAnalysis,
     WorkflowExecution,
+    GeneratedArticle,
+    GeneratedArticleImage,
+    GeneratedArticleVersion,
+    GeneratedImage,
 )
 
 
 async def clear_database():
-    """Vide toutes les tables de la base de données."""
+    """Vide toutes les tables de la base de données et supprime les images."""
     # Créer une connexion async
     engine = create_async_engine(
         settings.database_url,
@@ -68,6 +73,10 @@ async def clear_database():
             "audit_log",
             "performance_metrics",
             "site_analysis_results",
+            "generated_article_versions",
+            "generated_article_images",
+            "generated_articles",
+            "generated_images",
             "client_articles",
             "competitor_articles",
             "crawl_cache",
@@ -91,6 +100,31 @@ async def clear_database():
         print(f"📊 {len(tables)} tables traitées")
 
     await engine.dispose()
+    
+    # Supprimer les images générées
+    print("\n🖼️  Suppression des images générées...")
+    images_dir = Path(__file__).parent.parent / "outputs" / "articles" / "images"
+    
+    if images_dir.exists():
+        try:
+            # Compter les fichiers avant suppression
+            image_files = list(images_dir.glob("*.png")) + list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.jpeg"))
+            count = len(image_files)
+            
+            # Supprimer tous les fichiers d'images
+            for image_file in image_files:
+                try:
+                    image_file.unlink()
+                except Exception as e:
+                    print(f"⚠️  Erreur lors de la suppression de '{image_file.name}': {e}")
+            
+            print(f"✅ {count} image(s) supprimée(s) du répertoire '{images_dir}'")
+        except Exception as e:
+            print(f"⚠️  Erreur lors de la suppression des images: {e}")
+    else:
+        print(f"ℹ️  Le répertoire '{images_dir}' n'existe pas")
+    
+    print("\n🎉 Nettoyage terminé avec succès!")
 
 
 if __name__ == "__main__":

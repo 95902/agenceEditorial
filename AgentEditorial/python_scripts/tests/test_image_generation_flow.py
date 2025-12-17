@@ -196,3 +196,4 @@ class TestImageGenerationFlow:
         status = vram_manager.get_vram_status()
         assert status.current_owner == "none"
 
+

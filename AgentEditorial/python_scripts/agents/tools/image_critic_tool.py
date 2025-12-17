@@ -87,3 +87,4 @@ class ImageCriticTool(BaseTool):
             logger.error(error_msg, image_path=image_path, error=str(e))
             raise ValueError(error_msg) from e
 
+

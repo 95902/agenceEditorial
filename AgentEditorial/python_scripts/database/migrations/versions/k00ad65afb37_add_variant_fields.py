@@ -41,3 +41,4 @@ def downgrade() -> None:
     op.drop_column('generated_article_images', 'variant_number')
     op.drop_column('generated_article_images', 'variant_group_id')
 
+
