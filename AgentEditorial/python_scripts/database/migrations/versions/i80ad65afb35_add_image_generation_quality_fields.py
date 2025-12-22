@@ -123,3 +123,5 @@ def downgrade() -> None:
     op.drop_column("generated_article_images", "negative_prompt")
 
 
+
+
