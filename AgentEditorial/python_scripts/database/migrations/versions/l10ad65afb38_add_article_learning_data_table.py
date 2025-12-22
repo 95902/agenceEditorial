@@ -113,3 +113,5 @@ def downgrade() -> None:
     )
     op.drop_table("article_learning_data")
 
+
+

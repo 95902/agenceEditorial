@@ -395,3 +395,5 @@ class ArticleLearningService:
         """Construit un prompt de base."""
         return f"Topic: {topic}\nKeywords: {', '.join(keywords)}\nTone: {tone}\nTarget words: {target_words}"
 
+
+

@@ -74,3 +74,5 @@ class TrainingStatsResponse(BaseModel):
     with_learned_patterns: int
     average_global_score: Optional[float] = None
 
+
+
