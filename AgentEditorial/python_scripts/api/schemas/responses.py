@@ -1,7 +1,7 @@
 """Pydantic response schemas for API endpoints."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -167,4 +167,83 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     execution_id: Optional[UUID] = None
+
+
+# ============================================================
+# Site Audit Response Schemas
+# ============================================================
+
+class DomainDetail(BaseModel):
+    """Response schema for activity domain detail."""
+
+    id: str = Field(..., description="Domain slug identifier")
+    label: str = Field(..., description="Domain label")
+    confidence: int = Field(..., description="Confidence score (0-100)", ge=0, le=100)
+    topics_count: int = Field(..., description="Number of articles for this domain", ge=0)
+    summary: str = Field(..., description="Domain summary description")
+
+
+class WorkflowStep(BaseModel):
+    """Response schema for workflow step status."""
+
+    step: int = Field(..., description="Step number")
+    name: str = Field(..., description="Step name")
+    status: Literal["pending", "running", "completed", "failed"] = Field(
+        ..., description="Step status"
+    )
+    execution_id: Optional[str] = Field(None, description="Execution ID for this step")
+
+
+class DataStatus(BaseModel):
+    """Response schema for data availability status."""
+
+    has_profile: bool = Field(..., description="Site profile exists")
+    has_competitors: bool = Field(..., description="Competitors data exists")
+    has_client_articles: bool = Field(..., description="Client articles exist")
+    has_competitor_articles: bool = Field(..., description="Competitor articles exist")
+    has_trend_pipeline: bool = Field(..., description="Trend pipeline data exists")
+
+
+class PendingAuditResponse(BaseModel):
+    """Response schema for pending audit (workflows in progress)."""
+
+    status: Literal["pending"] = Field(..., description="Status is pending")
+    execution_id: str = Field(..., description="Orchestrator execution ID")
+    message: str = Field(..., description="Status message")
+    workflow_steps: List[WorkflowStep] = Field(..., description="List of workflow steps")
+    data_status: DataStatus = Field(..., description="Current data availability status")
+
+
+class SiteAuditResponse(BaseModel):
+    """Response schema for complete site audit."""
+
+    url: str = Field(..., description="Site URL")
+    profile: Dict[str, Any] = Field(
+        ...,
+        description="Site profile with style and themes",
+        example={
+            "style": {
+                "tone": "professionnel",
+                "vocabulary": "spécialisé en technologie",
+                "format": "articles longs (1500-2500 mots)",
+            },
+            "themes": ["Cloud Computing", "Cybersécurité"],
+        },
+    )
+    domains: List[DomainDetail] = Field(..., description="Activity domains with details")
+    audience: Dict[str, Any] = Field(
+        ...,
+        description="Target audience information",
+        example={
+            "type": "Professionnels IT",
+            "level": "Intermédiaire à Expert",
+            "sectors": ["Entreprises", "Startups Tech", "DSI"],
+        },
+    )
+    competitors: List[Dict[str, Any]] = Field(
+        ...,
+        description="List of competitors",
+        example=[{"name": "TechNews.fr", "similarity": 85}],
+    )
+    took_ms: int = Field(..., description="Analysis duration in milliseconds", ge=0)
 
