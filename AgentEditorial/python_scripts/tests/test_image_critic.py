@@ -231,3 +231,5 @@ class TestImageCritic:
                 assert result.scores.no_text == 2
 
 
+
+
