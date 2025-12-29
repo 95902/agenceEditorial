@@ -114,6 +114,85 @@ class TrendPipelineAgent(BaseAgent):
                 client_domain=client_domain,
                 collection_name=self.clustering_config.embedding_collection,
             )
+
+    async def _validate_prerequisites(self, domains: List[str]) -> Dict[str, Any]:
+        """
+        Validate prerequisites before running the pipeline.
+
+        Args:
+            domains: List of domains to analyze
+
+        Returns:
+            Validation result with success status and error message if applicable
+        """
+        collection_name = self.clustering_config.embedding_collection
+
+        logger.info(
+            "Validating pipeline prerequisites",
+            collection=collection_name,
+            domains=domains,
+        )
+
+        # Check if Qdrant collection exists
+        try:
+            client = self._embedding_fetcher.client
+            collections = client.get_collections().collections
+            collection_names = [c.name for c in collections]
+
+            if collection_name not in collection_names:
+                error_msg = (
+                    f"Qdrant collection '{collection_name}' does not exist. "
+                    f"Available collections: {collection_names}. "
+                    "This indicates that no articles have been scraped yet for this client domain. "
+                    "Please run the scraping pipeline first to index competitor articles."
+                )
+                logger.error(
+                    "Prerequisites validation failed: collection not found",
+                    collection=collection_name,
+                    available_collections=collection_names,
+                )
+                return {"success": False, "error": error_msg}
+
+            # Check collection is not empty
+            try:
+                collection_info = client.get_collection(collection_name)
+                points_count = getattr(collection_info, "points_count", 0)
+
+                if points_count == 0:
+                    error_msg = (
+                        f"Collection '{collection_name}' exists but contains no articles. "
+                        "Please run the scraping pipeline to index competitor articles before running trend analysis."
+                    )
+                    logger.error(
+                        "Prerequisites validation failed: empty collection",
+                        collection=collection_name,
+                        points_count=0,
+                    )
+                    return {"success": False, "error": error_msg}
+
+                logger.info(
+                    "Prerequisites validation passed",
+                    collection=collection_name,
+                    points_count=points_count,
+                )
+                return {"success": True, "points_count": points_count}
+
+            except Exception as e:
+                logger.warning(
+                    "Could not get collection info during validation",
+                    collection=collection_name,
+                    error=str(e),
+                )
+                # Continue anyway - will be caught later in fetch_embeddings
+                return {"success": True}
+
+        except Exception as e:
+            error_msg = f"Failed to validate prerequisites: {str(e)}"
+            logger.error(
+                "Prerequisites validation error",
+                error=str(e),
+            )
+            return {"success": False, "error": error_msg}
     
     async def execute(
         self,
@@ -157,14 +236,34 @@ class TrendPipelineAgent(BaseAgent):
         )
         self.db_session.add(execution)
         await self.db_session.commit()
-        
+
         results = {
             "execution_id": execution_id,
             "stages": {},
             "success": True,
         }
-        
+
         try:
+            # Validate prerequisites before starting
+            logger.info("Validating prerequisites before starting pipeline")
+            validation_result = await self._validate_prerequisites(domains)
+
+            if not validation_result.get("success"):
+                error_msg = validation_result.get("error", "Prerequisites validation failed")
+                execution.error_message = error_msg
+                execution.stage_1_clustering_status = "failed"
+                await self.db_session.commit()
+
+                logger.error(
+                    "Pipeline execution aborted due to failed prerequisites",
+                    execution_id=execution_id,
+                    error=error_msg,
+                )
+
+                results["success"] = False
+                results["error"] = error_msg
+                return results
+
             # STAGE 1: Clustering
             logger.info("Starting Stage 1: Clustering")
             execution.stage_1_clustering_status = "in_progress"
@@ -327,11 +426,38 @@ class TrendPipelineAgent(BaseAgent):
             domains=domains,
             max_age_days=time_window_days,
         )
-        
+
         if len(embeddings) < self.clustering_config.min_articles:
+            error_msg = (
+                f"Not enough articles ({len(embeddings)}). Minimum: {self.clustering_config.min_articles}. "
+                f"Collection: {self.clustering_config.embedding_collection}. "
+            )
+
+            if len(embeddings) == 0:
+                error_msg += (
+                    "No articles were found in the collection. "
+                    "This typically means the scraping pipeline has not been run yet, "
+                    "or articles were scraped with a different client_domain configuration. "
+                    "Please run the scraping pipeline first to index competitor articles."
+                )
+            else:
+                error_msg += (
+                    f"The collection contains {len(embeddings)} articles, but at least "
+                    f"{self.clustering_config.min_articles} are required for meaningful clustering. "
+                    "Run the scraping pipeline to index more articles, or adjust the min_articles threshold."
+                )
+
+            logger.error(
+                "Stage 1 clustering prerequisites not met",
+                articles_found=len(embeddings),
+                articles_required=self.clustering_config.min_articles,
+                collection=self.clustering_config.embedding_collection,
+                domains_requested=domains,
+            )
+
             return {
                 "success": False,
-                "error": f"Not enough articles ({len(embeddings)}). Minimum: {self.clustering_config.min_articles}",
+                "error": error_msg,
             }
         
         # Extract texts for clustering

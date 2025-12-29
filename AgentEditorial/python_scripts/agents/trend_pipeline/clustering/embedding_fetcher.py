@@ -45,34 +45,75 @@ class EmbeddingFetcher:
     ) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
         """
         Fetch embeddings from Qdrant collection.
-        
+
         Args:
             domains: Filter by domains (optional)
             max_age_days: Maximum article age in days (optional)
             limit: Maximum number of embeddings to fetch (optional)
-            
+
         Returns:
             Tuple of (embeddings array, metadata list, document IDs list)
         """
         collection_name = self.config.embedding_collection
         max_age = max_age_days or self.config.max_age_days
-        
+
         logger.info(
             "Fetching embeddings from Qdrant",
             collection=collection_name,
             domains=domains,
             max_age_days=max_age,
         )
-        
-        # Check collection info first
+
+        # Check if collection exists first
+        try:
+            collections = self.client.get_collections().collections
+            collection_names = [c.name for c in collections]
+
+            if collection_name not in collection_names:
+                logger.error(
+                    "Collection does not exist in Qdrant",
+                    collection=collection_name,
+                    available_collections=collection_names,
+                    error_type="collection_not_found",
+                )
+                logger.info(
+                    "This error typically occurs when articles have not been scraped yet. "
+                    "Run the scraping pipeline first to index competitor articles before running trend analysis.",
+                )
+                # Return empty arrays to allow pipeline to handle gracefully
+                return np.array([], dtype=np.float32), [], []
+        except Exception as e:
+            logger.error(
+                "Failed to check collection existence",
+                collection=collection_name,
+                error=str(e),
+                error_type="connection_error",
+            )
+            # Return empty arrays on connection error
+            return np.array([], dtype=np.float32), [], []
+
+        # Check collection info
         try:
             collection_info = self.get_collection_info()
+            points_count = collection_info.get("points_count", 0)
+            vectors_count = collection_info.get("vectors_count", 0)
+
             logger.info(
                 "Collection info",
                 collection=collection_name,
-                points_count=collection_info.get("points_count", 0),
-                vectors_count=collection_info.get("vectors_count", 0),
+                points_count=points_count,
+                vectors_count=vectors_count,
             )
+
+            # Warn if collection is empty
+            if points_count == 0:
+                logger.warning(
+                    "Collection exists but contains no articles",
+                    collection=collection_name,
+                    message="Run the scraping pipeline to index competitor articles before running trend analysis.",
+                )
+                # Return empty arrays
+                return np.array([], dtype=np.float32), [], []
         except Exception as e:
             logger.warning("Could not get collection info", error=str(e))
         
@@ -176,7 +217,29 @@ class EmbeddingFetcher:
                 offset = next_offset
                 
             except Exception as e:
-                logger.error("Error fetching embeddings", error=str(e))
+                error_msg = str(e)
+                # Categorize error type
+                if "Not found" in error_msg or "doesn't exist" in error_msg:
+                    logger.error(
+                        "Collection not found during scroll - this should not happen after initial check",
+                        collection=collection_name,
+                        error=error_msg,
+                        error_type="collection_not_found",
+                    )
+                elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                    logger.error(
+                        "Connection error while fetching embeddings",
+                        collection=collection_name,
+                        error=error_msg,
+                        error_type="connection_error",
+                    )
+                else:
+                    logger.error(
+                        "Unexpected error fetching embeddings",
+                        collection=collection_name,
+                        error=error_msg,
+                        error_type="unknown_error",
+                    )
                 break
         
         # Convert to numpy array
@@ -194,8 +257,9 @@ class EmbeddingFetcher:
         # If no results with domain filter, try without filter to see what domains exist
         if total_scanned == 0 and domains:
             logger.warning(
-                "No results with domain filter, trying without filter to diagnose",
-                domains=domains,
+                "No articles found matching domain filter",
+                requested_domains=domains,
+                collection=collection_name,
             )
             # Try a small sample without domain filter to see available domains
             try:
@@ -212,9 +276,17 @@ class EmbeddingFetcher:
                         if point.payload and "domain" in point.payload:
                             available_domains.add(point.payload["domain"])
                     logger.info(
-                        "Sample domains found in collection",
+                        "Diagnosis: Collection contains articles from different domains",
                         available_domains=list(available_domains),
                         requested_domains=domains,
+                        message="The requested domains do not match the domains in the collection. "
+                                "This may indicate that articles were scraped with a different configuration.",
+                    )
+                else:
+                    logger.warning(
+                        "Collection appears to be empty",
+                        collection=collection_name,
+                        message="No articles found in collection even without domain filter.",
                     )
             except Exception as e:
                 logger.debug("Could not sample collection", error=str(e))
