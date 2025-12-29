@@ -140,18 +140,46 @@ class TrendPipelineAgent(BaseAgent):
             collection_names = [c.name for c in collections]
 
             if collection_name not in collection_names:
-                error_msg = (
-                    f"Qdrant collection '{collection_name}' does not exist. "
-                    f"Available collections: {collection_names}. "
-                    "This indicates that no articles have been scraped yet for this client domain. "
-                    "Please run the scraping pipeline first to index competitor articles."
-                )
-                logger.error(
-                    "Prerequisites validation failed: collection not found",
+                # Collection doesn't exist - create it automatically
+                logger.warning(
+                    "Collection does not exist, creating empty collection automatically",
                     collection=collection_name,
                     available_collections=collection_names,
                 )
-                return {"success": False, "error": error_msg}
+
+                # Create the collection using qdrant_client wrapper
+                from python_scripts.vectorstore.qdrant_client import qdrant_client
+
+                try:
+                    qdrant_client.ensure_collection_exists(collection_name)
+
+                    logger.info(
+                        "Collection created successfully (empty)",
+                        collection=collection_name,
+                    )
+
+                    # Return success with warning that collection is empty
+                    return {
+                        "success": True,
+                        "points_count": 0,
+                        "warning": (
+                            f"Collection '{collection_name}' was created but contains no articles. "
+                            "Trend pipeline will continue but may return empty results. "
+                            "Run the scraping pipeline to index competitor articles."
+                        )
+                    }
+
+                except Exception as create_error:
+                    error_msg = (
+                        f"Failed to create Qdrant collection '{collection_name}': {str(create_error)}. "
+                        "Cannot proceed with trend analysis."
+                    )
+                    logger.error(
+                        "Failed to create collection",
+                        collection=collection_name,
+                        error=str(create_error),
+                    )
+                    return {"success": False, "error": error_msg}
 
             # Check collection is not empty
             try:
@@ -159,16 +187,22 @@ class TrendPipelineAgent(BaseAgent):
                 points_count = getattr(collection_info, "points_count", 0)
 
                 if points_count == 0:
-                    error_msg = (
+                    # Collection exists but is empty - continue with warning instead of failing
+                    warning_msg = (
                         f"Collection '{collection_name}' exists but contains no articles. "
-                        "Please run the scraping pipeline to index competitor articles before running trend analysis."
+                        "Trend pipeline will continue but may return empty results. "
+                        "Run the scraping pipeline to index competitor articles."
                     )
-                    logger.error(
-                        "Prerequisites validation failed: empty collection",
+                    logger.warning(
+                        "Prerequisites validation: empty collection, continuing anyway",
                         collection=collection_name,
                         points_count=0,
                     )
-                    return {"success": False, "error": error_msg}
+                    return {
+                        "success": True,
+                        "points_count": 0,
+                        "warning": warning_msg
+                    }
 
                 logger.info(
                     "Prerequisites validation passed",
@@ -263,6 +297,16 @@ class TrendPipelineAgent(BaseAgent):
                 results["success"] = False
                 results["error"] = error_msg
                 return results
+
+            # Log warning if collection was created or is empty
+            if validation_result.get("warning"):
+                warning_msg = validation_result.get("warning")
+                logger.warning(
+                    "Prerequisites validation completed with warning",
+                    execution_id=execution_id,
+                    warning=warning_msg,
+                    points_count=validation_result.get("points_count", 0),
+                )
 
             # STAGE 1: Clustering
             logger.info("Starting Stage 1: Clustering")
