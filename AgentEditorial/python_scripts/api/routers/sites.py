@@ -2184,14 +2184,14 @@ async def run_missing_workflows_chain(
                 competitor_execution = await create_workflow_execution(
                     db,
                     workflow_type="competitor_search",
-                    input_data={"domain": domain, "max_competitors": 20},
+                    input_data={"domain": domain, "max_competitors": 50},
                     status="pending",
                     parent_execution_id=orchestrator_execution_id,
                 )
                 
                 await orchestrator.run_competitor_search(
                     domain=domain,
-                    max_competitors=20,
+                    max_competitors=50,
                     execution_id=competitor_execution.execution_id,
                 )
                 
