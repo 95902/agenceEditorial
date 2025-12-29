@@ -764,29 +764,104 @@ async def _check_competitors(
 
 
 async def _check_competitor_articles(
-    db: AsyncSession, competitor_domains: List[str]
+    db: AsyncSession, competitor_domains: List[str], client_domain: Optional[str] = None
 ) -> tuple[int, bool]:
     """
-    Count competitor articles and check if sufficient.
-    
+    Count competitor articles and check if sufficient in both PostgreSQL AND Qdrant.
+
+    This function ensures consistency between PostgreSQL and Qdrant by checking:
+    1. Number of articles in PostgreSQL
+    2. Number of articles indexed in Qdrant collection
+
+    If Qdrant collection is empty or has fewer articles than PostgreSQL,
+    returns is_sufficient=False to trigger re-scraping/re-indexing.
+
     Args:
         db: Database session
         competitor_domains: List of competitor domains
-        
+        client_domain: Client domain for generating Qdrant collection name
+
     Returns:
-        Tuple of (count, is_sufficient) where is_sufficient is True if count >= 10
+        Tuple of (count, is_sufficient) where is_sufficient is True if:
+        - PostgreSQL has >= 10 articles AND
+        - Qdrant has >= 10 articles (ensuring consistency)
     """
     from python_scripts.database.crud_articles import count_competitor_articles
-    
+    from python_scripts.vectorstore.qdrant_client import qdrant_client, get_competitor_collection_name
+
     if not competitor_domains:
         return (0, False)
-    
-    total_count = 0
+
+    # Count articles in PostgreSQL
+    postgres_count = 0
     for comp_domain in competitor_domains:
         count = await count_competitor_articles(db, domain=comp_domain)
-        total_count += count
-    
-    return (total_count, total_count >= 10)
+        postgres_count += count
+
+    # Check Qdrant collection if client_domain is provided
+    qdrant_count = 0
+    if client_domain:
+        try:
+            collection_name = get_competitor_collection_name(client_domain)
+
+            # Check if collection exists and get count
+            if qdrant_client.collection_exists(collection_name):
+                collection_info = qdrant_client.client.get_collection(collection_name)
+                qdrant_count = getattr(collection_info, "points_count", 0)
+
+                logger.info(
+                    "Competitor articles count check",
+                    postgres_count=postgres_count,
+                    qdrant_count=qdrant_count,
+                    collection=collection_name,
+                    domains_count=len(competitor_domains),
+                )
+
+                # If mismatch detected, log warning
+                if postgres_count > 0 and qdrant_count == 0:
+                    logger.warning(
+                        "Inconsistency detected: PostgreSQL has articles but Qdrant is empty",
+                        postgres_count=postgres_count,
+                        qdrant_count=0,
+                        collection=collection_name,
+                        recommendation="Will trigger re-scraping to re-index articles in Qdrant",
+                    )
+                elif abs(postgres_count - qdrant_count) > postgres_count * 0.2:  # >20% difference
+                    logger.warning(
+                        "Inconsistency detected: PostgreSQL and Qdrant counts differ significantly",
+                        postgres_count=postgres_count,
+                        qdrant_count=qdrant_count,
+                        difference=abs(postgres_count - qdrant_count),
+                        collection=collection_name,
+                    )
+            else:
+                logger.info(
+                    "Qdrant collection does not exist",
+                    collection=collection_name,
+                    postgres_count=postgres_count,
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not check Qdrant collection",
+                error=str(e),
+                client_domain=client_domain,
+            )
+            # If we can't check Qdrant, assume it needs re-indexing
+            qdrant_count = 0
+    else:
+        # No client_domain provided, only check PostgreSQL
+        logger.info(
+            "No client_domain provided, checking PostgreSQL only",
+            postgres_count=postgres_count,
+        )
+        qdrant_count = postgres_count  # Assume Qdrant is in sync
+
+    # Consider sufficient only if BOTH PostgreSQL AND Qdrant have enough articles
+    # This ensures consistency between the two systems
+    min_required = 10
+    is_sufficient = postgres_count >= min_required and qdrant_count >= min_required
+
+    return (postgres_count, is_sufficient)
 
 
 async def _check_client_articles(
@@ -2574,7 +2649,9 @@ async def _get_audit_status(
             and (c.get("validated", False) or c.get("manual", False))
         ]
         if competitor_domains:
-            count, is_sufficient = await _check_competitor_articles(db, competitor_domains)
+            count, is_sufficient = await _check_competitor_articles(
+                db, competitor_domains, client_domain=domain
+            )
             competitor_articles_count = count
             has_competitor_articles = is_sufficient
     
@@ -2681,9 +2758,9 @@ async def get_site_audit(
         ]
         
         if competitor_domains:
-            # Compter les articles pour ces domaines
+            # Compter les articles pour ces domaines (PostgreSQL + Qdrant)
             count, is_sufficient = await _check_competitor_articles(
-                db, competitor_domains
+                db, competitor_domains, client_domain=domain
             )
             competitor_articles_count = count
             needs_scraping = not is_sufficient
