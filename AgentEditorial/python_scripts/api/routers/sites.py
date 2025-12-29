@@ -2336,11 +2336,11 @@ async def run_missing_workflows_chain(
                         validation_status = c.get("validation_status", "validated")
                         validated = c.get("validated", False)
                         excluded = c.get("excluded", False)
-                        domain = c.get("domain")
+                        competitor_domain = c.get("domain")
 
                         # Include only validated or manual competitors (not excluded)
-                        if domain and not excluded and (validation_status in ["validated", "manual"] or validated):
-                            competitor_domains.append(domain)
+                        if competitor_domain and not excluded and (validation_status in ["validated", "manual"] or validated):
+                            competitor_domains.append(competitor_domain)
 
                     if competitor_domains:
                         logger.info(
