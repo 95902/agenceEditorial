@@ -179,7 +179,7 @@ class DomainDetail(BaseModel):
     id: str = Field(..., description="Domain slug identifier")
     label: str = Field(..., description="Domain label")
     confidence: int = Field(..., description="Confidence score (0-100)", ge=0, le=100)
-    topics_count: int = Field(..., description="Number of articles for this domain", ge=0)
+    topics_count: int = Field(..., description="Number of relevant topic clusters from trend pipeline for this domain", ge=0)
     summary: str = Field(..., description="Domain summary description")
 
 
@@ -192,6 +192,28 @@ class WorkflowStep(BaseModel):
         ..., description="Step status"
     )
     execution_id: Optional[str] = Field(None, description="Execution ID for this step")
+
+
+class WorkflowStepDetail(BaseModel):
+    """Détails d'une étape de workflow avec progression."""
+
+    step: int = Field(..., description="Numéro de l'étape")
+    name: str = Field(..., description="Nom de l'étape")
+    workflow_type: str = Field(..., description="Type de workflow")
+    status: Literal["pending", "running", "completed", "failed"] = Field(
+        ..., description="Statut de l'étape"
+    )
+    execution_id: Optional[str] = Field(None, description="ID d'exécution")
+    start_time: Optional[datetime] = Field(None, description="Heure de début")
+    end_time: Optional[datetime] = Field(None, description="Heure de fin")
+    duration_seconds: Optional[int] = Field(None, description="Durée en secondes")
+    error_message: Optional[str] = Field(None, description="Message d'erreur si échec")
+    progress_percentage: Optional[float] = Field(
+        None,
+        description="Pourcentage de progression (0-100)",
+        ge=0,
+        le=100,
+    )
 
 
 class DataStatus(BaseModel):
@@ -246,4 +268,139 @@ class SiteAuditResponse(BaseModel):
         example=[{"name": "TechNews.fr", "similarity": 85}],
     )
     took_ms: int = Field(..., description="Analysis duration in milliseconds", ge=0)
+
+
+class AuditStatusResponse(BaseModel):
+    """Réponse pour le statut global de l'audit."""
+
+    orchestrator_execution_id: str = Field(..., description="ID de l'orchestrator")
+    domain: str = Field(..., description="Domaine analysé")
+    overall_status: Literal["pending", "running", "completed", "failed", "partial"] = Field(
+        ..., description="Statut global"
+    )
+    overall_progress: float = Field(
+        ...,
+        description="Progression globale (0-100)",
+        ge=0,
+        le=100,
+    )
+    total_steps: int = Field(..., description="Nombre total d'étapes")
+    completed_steps: int = Field(..., description="Nombre d'étapes complétées")
+    failed_steps: int = Field(..., description="Nombre d'étapes échouées")
+    running_steps: int = Field(..., description="Nombre d'étapes en cours")
+    pending_steps: int = Field(..., description="Nombre d'étapes en attente")
+    workflow_steps: List[WorkflowStepDetail] = Field(
+        ...,
+        description="Détails de chaque étape",
+    )
+    start_time: Optional[datetime] = Field(None, description="Heure de début globale")
+    estimated_completion_time: Optional[datetime] = Field(
+        None,
+        description="Estimation de fin",
+    )
+    data_status: DataStatus = Field(..., description="Statut des données")
+
+
+# ============================================================
+# Topics by Domain Response Schemas
+# ============================================================
+
+class TopicEngagement(BaseModel):
+    """Engagement metrics for a topic."""
+
+    views: Optional[int] = Field(None, description="Number of views", examples=[1250])
+    shares: Optional[int] = Field(None, description="Number of shares", examples=[45])
+
+
+class TopicDetail(BaseModel):
+    """Detailed topic information for frontend."""
+
+    id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride"])
+    title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
+    summary: str = Field(..., description="Topic summary", examples=["Analyse des tendances émergentes..."])
+    keywords: List[str] = Field(..., description="Topic keywords", examples=[["edge computing", "cloud hybride"]])
+    publish_date: Optional[str] = Field(None, description="Most recent publication date (YYYY-MM-DD)", examples=["2024-09-20"])
+    read_time: Optional[str] = Field(None, description="Estimated read time", examples=["8 min"])
+    engagement: Optional[TopicEngagement] = Field(None, description="Engagement metrics (optional)")
+    category: Optional[str] = Field(None, description="Topic category/scope", examples=["Infrastructure"])
+    relevance_score: Optional[int] = Field(None, description="Relevance score (0-100)", examples=[95])
+    trend: Optional[str] = Field(None, description="Trend direction: up, stable, down", examples=["up"])
+    sources: Optional[List[str]] = Field(None, description="Source domains", examples=[["AWS Blog", "TechCrunch"]])
+
+
+class DomainTopicsResponse(BaseModel):
+    """Response schema for topics by domain."""
+
+    domain: str = Field(..., description="Activity domain", examples=["cyber"])
+    count: int = Field(..., description="Number of topics", examples=[5])
+    topics: List[TopicDetail] = Field(..., description="List of topics")
+
+
+# ============================================================
+# Topic Details Response Schemas
+# ============================================================
+
+class CompetitorDetail(BaseModel):
+    """Competitor article detail."""
+
+    name: str = Field(..., description="Competitor domain name", examples=["TechNews.fr"])
+    title: str = Field(..., description="Article title", examples=["Edge Computing : La révolution de l'informatique distribuée"])
+    published_date: Optional[str] = Field(None, description="Publication date (YYYY-MM-DD)", examples=["2024-09-18"])
+    performance: Optional[Dict[str, Any]] = Field(None, description="Performance metrics (optional)", examples=[{"views": 2500, "shares": 89, "engagement": "Élevé"}])
+    strengths: Optional[List[str]] = Field(None, description="Article strengths (optional)", examples=[["Exemples concrets", "Schémas techniques"]])
+    weaknesses: Optional[List[str]] = Field(None, description="Article weaknesses (optional)", examples=[["Manque de cas d'usage enterprise"]])
+
+
+class AngleDetail(BaseModel):
+    """Editorial angle detail."""
+
+    angle: str = Field(..., description="Angle title", examples=["Guide pratique d'implémentation"])
+    description: str = Field(..., description="Angle description", examples=["Comment implémenter l'edge computing étape par étape"])
+    differentiation: Optional[str] = Field(None, description="Differentiation strategy (optional)", examples=["Plus pratique et actionnable que les concurrents"])
+    potential: Optional[str] = Field(None, description="Potential level: Élevé, Moyen, Faible (optional)", examples=["Élevé"])
+
+
+class SourceDetail(BaseModel):
+    """Source detail."""
+
+    name: str = Field(..., description="Source domain name", examples=["AWS Blog"])
+    type: Optional[str] = Field(None, description="Source type (optional)", examples=["Documentation officielle"])
+    credibility: Optional[str] = Field(None, description="Credibility level (optional)", examples=["Très élevée"])
+    last_update: Optional[str] = Field(None, description="Last update date (YYYY-MM-DD) (optional)", examples=["2024-09-20"])
+    relevant_content: Optional[str] = Field(None, description="Relevant content description (optional)", examples=["Guide d'architecture edge computing"])
+
+
+class TopicPredictions(BaseModel):
+    """Topic performance predictions."""
+
+    views: Optional[str] = Field(None, description="Predicted views range", examples=["2,500 - 4,000"])
+    shares: Optional[str] = Field(None, description="Predicted shares range", examples=["50 - 80"])
+    writing_time: Optional[str] = Field(None, description="Estimated writing time", examples=["2-3 heures"])
+    difficulty: Optional[str] = Field(None, description="Difficulty level", examples=["Intermédiaire"])
+
+
+class TrendDetail(BaseModel):
+    """Trend information."""
+
+    label: str = Field(..., description="Trend label (En hausse, Stable, En baisse)", examples=["En hausse"])
+    delta: Optional[str] = Field(None, description="Trend delta description (optional)", examples=["+35% de recherches sur ce sujet dans les 30 derniers jours"])
+
+
+class TopicDetailsResponse(BaseModel):
+    """Response schema for topic details."""
+
+    id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride"])
+    title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
+    publish_date: Optional[str] = Field(None, description="Most recent publication date (YYYY-MM-DD)", examples=["2024-09-20"])
+    read_time: Optional[str] = Field(None, description="Estimated read time", examples=["8 min"])
+    relevance_score: Optional[int] = Field(None, description="Relevance score (0-100)", examples=[95])
+    category: Optional[str] = Field(None, description="Topic category/scope", examples=["Infrastructure"])
+    summary: str = Field(..., description="Topic summary", examples=["Analyse des tendances émergentes de l'edge computing..."])
+    keywords: List[str] = Field(..., description="Topic keywords", examples=[["edge computing", "cloud hybride", "latence"]])
+    key_points: Optional[List[str]] = Field(None, description="Key points from article outline (optional)", examples=[["Définition et principe de l'edge computing", "Avantages par rapport au cloud centralisé"]])
+    competitors: Optional[List[CompetitorDetail]] = Field(None, description="Competitor articles (optional)")
+    angles: Optional[List[AngleDetail]] = Field(None, description="Editorial angles (optional)")
+    sources: Optional[List[SourceDetail]] = Field(None, description="Sources (optional)")
+    predictions: Optional[TopicPredictions] = Field(None, description="Predictions (optional)")
+    trend: Optional[TrendDetail] = Field(None, description="Trend information (optional)")
 

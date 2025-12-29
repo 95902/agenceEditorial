@@ -1,7 +1,10 @@
 """FastAPI main application."""
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from python_scripts.api.middleware.rate_limit import setup_rate_limiting
 from python_scripts.api.routers import (
@@ -10,6 +13,7 @@ from python_scripts.api.routers import (
     article_training,
     competitors,
     discovery,
+    draft,
     errors,
     executions,
     health,
@@ -55,7 +59,18 @@ app.include_router(errors.router, prefix="/api/v1")
 app.include_router(article_enrichment.router, prefix="/api/v1")
 app.include_router(article_generation.router, prefix="/api/v1")
 app.include_router(article_training.router, prefix="/api/v1")
+app.include_router(draft.router, prefix="/api/v1")
 app.include_router(images.router, prefix="/api/v1")
+
+# Mount static files for serving generated images
+# This allows accessing images via /outputs/articles/images/...
+article_images_dir = Path(settings.article_images_dir)
+if article_images_dir.exists():
+    app.mount(
+        "/outputs/articles/images",
+        StaticFiles(directory=str(article_images_dir)),
+        name="article_images",
+    )
 
 
 @app.on_event("startup")

@@ -1,0 +1,174 @@
+{
+  "site_profile": {
+    "domain": "innosys.fr",
+    "id": 20
+  },
+  "domain_topic": "Cloud Infrastructure Management",
+  "trend_pipeline": {
+    "execution_id": "f13d8a04-8c66-487d-b578-6bef37806051",
+    "total_clusters": 13,
+    "total_articles": 1234
+  },
+  "articles": {
+    "total": 16,
+    "with_topic_id": 0,
+    "with_qdrant_point_id": 16
+  },
+  "clusters": {
+    "total": 13,
+    "relevant": 0,
+    "details": [
+      {
+        "cluster_id": 631,
+        "topic_id": 0,
+        "label": "social_esn_news",
+        "size": 465,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 465
+      },
+      {
+        "cluster_id": 632,
+        "topic_id": 1,
+        "label": "dropshipping_comptable_commerce",
+        "size": 173,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 173
+      },
+      {
+        "cluster_id": 633,
+        "topic_id": 2,
+        "label": "comment_\u00e9tapes_seo",
+        "size": 107,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 107
+      },
+      {
+        "cluster_id": 634,
+        "topic_id": 3,
+        "label": "vulnerabilite_solutions_vuln\u00e9rabilit\u00e9s",
+        "size": 53,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 53
+      },
+      {
+        "cluster_id": 635,
+        "topic_id": 4,
+        "label": "logiqe_cybers\u00e9curit\u00e9_audit",
+        "size": 48,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 48
+      },
+      {
+        "cluster_id": 636,
+        "topic_id": 5,
+        "label": "web_mesure_d\u00e9veloppement",
+        "size": 38,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 38
+      },
+      {
+        "cluster_id": 637,
+        "topic_id": 6,
+        "label": "kipaware_koesio_moduleo",
+        "size": 33,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 33
+      },
+      {
+        "cluster_id": 638,
+        "topic_id": 7,
+        "label": "microsoft_logiqe_365",
+        "size": 25,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 25
+      },
+      {
+        "cluster_id": 639,
+        "topic_id": 8,
+        "label": "d\u00e9finition_api_tests",
+        "size": 22,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 22
+      },
+      {
+        "cluster_id": 640,
+        "topic_id": 9,
+        "label": "portail_softia_web",
+        "size": 21,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 21
+      },
+      {
+        "cluster_id": 641,
+        "topic_id": 10,
+        "label": "comptable_c\u00f4t\u00e9s_expert",
+        "size": 18,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 18
+      },
+      {
+        "cluster_id": 642,
+        "topic_id": 11,
+        "label": "erpnext_erp_votre",
+        "size": 14,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 14
+      },
+      {
+        "cluster_id": 643,
+        "topic_id": 12,
+        "label": "gogency_vitrines_sites",
+        "size": 12,
+        "articles_by_topic_id": 0,
+        "articles_by_doc_ids": 0,
+        "total_articles": 0,
+        "matching_domain": 0,
+        "document_ids_count": 12
+      }
+    ]
+  },
+  "diagnosis": {
+    "has_trend_pipeline": true,
+    "has_clusters": true,
+    "has_articles": true,
+    "articles_have_topic_id": false,
+    "articles_have_qdrant_id": true,
+    "has_relevant_clusters": false
+  }
+}

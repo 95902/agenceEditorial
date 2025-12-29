@@ -1,7 +1,8 @@
 # Issue #003 : Assignation des topic_id aux articles après clustering
 
 **Date de création** : 2025-12-22  
-**Statut** : À implémenter  
+**Date d'implémentation** : 2025-01-25  
+**Statut** : Implémenté  
 **Priorité** : Haute  
 **Type** : Bug / Amélioration  
 **Labels** : `trend-pipeline`, `clustering`, `qdrant`, `topic-assignment`, `data-integrity`
@@ -349,6 +350,11 @@ Pour valider la correction :
 
 - **2025-12-22** : Création de l'issue, identification du problème d'assignation des topic_id
 - **2025-12-22** : Diagnostic effectué, vérification Qdrant et PostgreSQL
+- **2025-01-25** : Implémentation complète
+  - Création du module `topic_assignment.py`
+  - Intégration dans `agent.py` après le Stage 1 (clustering)
+  - Mise à jour automatique des payloads Qdrant et colonnes PostgreSQL
+  - Gestion des erreurs et logging détaillé
 
 ---
 
@@ -358,4 +364,5 @@ Pour valider la correction :
 - Trend Pipeline : `python_scripts/agents/trend_pipeline/agent.py`
 - Qdrant Client : `python_scripts/vectorstore/qdrant_client.py`
 - Models : `python_scripts/database/models.py` (ClientArticle, CompetitorArticle, TopicCluster)
+
 

@@ -410,3 +410,7 @@ id title hook effort
 
 - **2025-01-25** : Création de l'issue, analyse complète des avantages/inconvénients
 
+
+
+
+

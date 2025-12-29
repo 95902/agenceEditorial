@@ -205,6 +205,56 @@ class TrendPipelineAgent(BaseAgent):
                     outliers_data=stage1_result["outliers"],
                 )
             
+            # Assign topic_id to articles after clustering
+            if stage1_result.get("success") and stage1_result.get("topics") and stage1_result.get("document_ids"):
+                from python_scripts.agents.trend_pipeline.topic_assignment import assign_topics_after_clustering
+                from uuid import UUID
+                
+                # Get document_ids from stage1_result (now included in return)
+                document_ids_str = stage1_result["document_ids"]
+                
+                # Convert to UUIDs
+                document_ids = []
+                for doc_id in document_ids_str:
+                    try:
+                        if isinstance(doc_id, str):
+                            document_ids.append(UUID(doc_id))
+                        elif isinstance(doc_id, UUID):
+                            document_ids.append(doc_id)
+                    except (ValueError, TypeError) as e:
+                        logger.debug("Failed to convert document_id to UUID", doc_id=doc_id, error=str(e))
+                        continue
+                
+                if document_ids and len(document_ids) == len(stage1_result["topics"]):
+                    logger.info("Assigning topic_id to articles after clustering")
+                    assignment_result = await assign_topics_after_clustering(
+                        db_session=self.db_session,
+                        topics=stage1_result["topics"],
+                        document_ids=document_ids,
+                        client_domain=client_domain or self.client_domain,
+                    )
+                    results["stages"]["topic_assignment"] = assignment_result
+                    
+                    if assignment_result.get("success"):
+                        logger.info(
+                            "Topic assignment completed",
+                            assigned_qdrant=assignment_result.get("assigned_qdrant", 0),
+                            assigned_postgresql=assignment_result.get("assigned_postgresql", 0),
+                        )
+                    else:
+                        logger.warning(
+                            "Topic assignment completed with errors",
+                            errors_qdrant=len(assignment_result.get("errors_qdrant", [])),
+                            errors_postgresql=len(assignment_result.get("errors_postgresql", [])),
+                        )
+                else:
+                    logger.warning(
+                        "Cannot assign topics: document_ids mismatch",
+                        topics_len=len(stage1_result.get("topics", [])),
+                        document_ids_len=len(document_ids),
+                        document_ids_str_len=len(document_ids_str),
+                    )
+            
             # STAGE 2: Temporal Analysis
             logger.info("Starting Stage 2: Temporal Analysis")
             execution.stage_2_temporal_status = "in_progress"
@@ -401,6 +451,7 @@ class TrendPipelineAgent(BaseAgent):
             "clusters": clusters,
             "outliers": outliers,
             "topics": cluster_result["topics"],
+            "document_ids": document_ids,  # Include document_ids in result for topic assignment
             "embeddings": embeddings,
             "centroids": cluster_result.get("centroids"),
             "documents": documents,
