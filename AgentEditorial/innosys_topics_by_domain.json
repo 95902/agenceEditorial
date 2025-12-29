@@ -1,0 +1,142 @@
+{
+  "domain": "innosys.fr",
+  "profile_id": 20,
+  "total_articles": 16,
+  "primary_domains": [
+    "Managed IT Services",
+    "Cloud Infrastructure Management",
+    "Security and Firewalling Consultancy",
+    "Telebackup Solutions",
+    "Application Development"
+  ],
+  "secondary_domains": [
+    "Website Design and Optimization",
+    "Office 365 Migration Services",
+    "Google Apps Integration",
+    "Mobile Application Development for iPhone, Android, Windows Phone",
+    "Cybersecurity Consulting"
+  ],
+  "topics_by_domain": {
+    "Managed IT Services": {
+      "topics_count": 1,
+      "percentage": 6.25
+    },
+    "Cloud Infrastructure Management": {
+      "topics_count": 1,
+      "percentage": 6.25
+    },
+    "Security and Firewalling Consultancy": {
+      "topics_count": 0,
+      "percentage": 0.0
+    },
+    "Telebackup Solutions": {
+      "topics_count": 1,
+      "percentage": 6.25
+    },
+    "Application Development": {
+      "topics_count": 2,
+      "percentage": 12.5
+    },
+    "Website Design and Optimization": {
+      "topics_count": 0,
+      "percentage": 0.0
+    },
+    "Office 365 Migration Services": {
+      "topics_count": 2,
+      "percentage": 12.5
+    },
+    "Google Apps Integration": {
+      "topics_count": 0,
+      "percentage": 0.0
+    },
+    "Mobile Application Development for iPhone, Android, Windows Phone": {
+      "topics_count": 2,
+      "percentage": 12.5
+    },
+    "Cybersecurity Consulting": {
+      "topics_count": 0,
+      "percentage": 0.0
+    }
+  },
+  "stored_counts": {},
+  "comparison": {
+    "Managed IT Services": {
+      "calculated_count": 1,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Cloud Infrastructure Management": {
+      "calculated_count": 1,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Security and Firewalling Consultancy": {
+      "calculated_count": 0,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Telebackup Solutions": {
+      "calculated_count": 1,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Application Development": {
+      "calculated_count": 2,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Website Design and Optimization": {
+      "calculated_count": 0,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Office 365 Migration Services": {
+      "calculated_count": 2,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Google Apps Integration": {
+      "calculated_count": 0,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Mobile Application Development for iPhone, Android, Windows Phone": {
+      "calculated_count": 2,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    },
+    "Cybersecurity Consulting": {
+      "calculated_count": 0,
+      "stored_count": null,
+      "match": null,
+      "difference": null
+    }
+  },
+  "trend_pipeline": {
+    "has_execution": true,
+    "execution_id": "bde30210-d766-4218-a710-451db9d0e30b",
+    "total_clusters": 13,
+    "articles_with_topic_id": 0,
+    "articles_without_topic_id": 16
+  },
+  "summary": {
+    "total_domains": 10,
+    "domains_with_articles": 6,
+    "domains_without_articles": 4,
+    "domains_with_stored_data": 0,
+    "domains_matching": 0,
+    "domains_differing": 0,
+    "domains_not_stored": 10,
+    "total_topic_clusters": 13,
+    "articles_assigned_to_topics": 0
+  }
+}

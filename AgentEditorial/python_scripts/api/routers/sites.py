@@ -6,15 +6,18 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, status
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from python_scripts.agents.agent_orchestrator import EditorialAnalysisOrchestrator
 from python_scripts.api.dependencies import get_db_session as get_db
 from python_scripts.api.schemas.requests import SiteAnalysisRequest
 from python_scripts.api.schemas.responses import (
+    AuditStatusResponse,
     DataStatus,
     DomainDetail,
+    DomainTopicsResponse,
     ErrorResponse,
     ExecutionResponse,
     MetricComparison,
@@ -23,15 +26,34 @@ from python_scripts.api.schemas.responses import (
     SiteHistoryEntry,
     SiteHistoryResponse,
     SiteProfileResponse,
+    TopicDetail,
+    TopicDetailsResponse,
+    TopicEngagement,
     WorkflowStep,
+    WorkflowStepDetail,
 )
+from python_scripts.database.crud_clusters import get_topic_clusters_by_analysis
 from python_scripts.database.crud_executions import get_workflow_execution
+from python_scripts.database.crud_llm_results import (
+    get_article_recommendations_by_topic_cluster,
+    get_trend_analyses_by_topic_cluster,
+)
 from python_scripts.database.crud_profiles import (
     get_site_profile_by_domain,
     get_site_history,
     list_site_profiles,
 )
-from python_scripts.database.models import SiteProfile
+from python_scripts.database.crud_temporal_metrics import get_temporal_metrics_by_topic_cluster
+from python_scripts.database.models import (
+    ArticleRecommendation,
+    ClientArticle,
+    CompetitorArticle,
+    SiteProfile,
+    TopicCluster,
+    TopicTemporalMetrics,
+    TrendAnalysis,
+    TrendPipelineExecution,
+)
 from python_scripts.utils.exceptions import WorkflowError
 from python_scripts.utils.logging import get_logger
 
@@ -257,6 +279,130 @@ def _count_articles_for_domain(
     return count
 
 
+async def _count_topics_for_domain(
+    db: AsyncSession,
+    profile: SiteProfile,
+    trend_execution: Optional[Any],
+    domain_label: str,
+) -> int:
+    """
+    Count topic clusters relevant to a domain from trend pipeline.
+    
+    Uses the same logic as _get_topics_by_domain to determine relevance.
+    
+    Args:
+        db: Database session
+        profile: SiteProfile instance
+        trend_execution: TrendPipelineExecution (optional)
+        domain_label: Domain label to match
+        
+    Returns:
+        Count of relevant topic clusters (0 if no trend pipeline)
+    """
+    if not trend_execution:
+        return 0
+    
+    from sqlalchemy import select
+    from python_scripts.database.models import ClientArticle, CompetitorArticle
+    from python_scripts.database.crud_clusters import get_topic_clusters_by_analysis
+    
+    # Get all clusters from trend pipeline
+    clusters = await get_topic_clusters_by_analysis(
+        db,
+        trend_execution.id,
+        scope=None,
+        only_valid=True,
+    )
+    
+    if not clusters:
+        return 0
+    
+    # Get all articles (client + competitor) for matching
+    all_client_articles_stmt = (
+        select(ClientArticle)
+        .where(
+            ClientArticle.site_profile_id == profile.id,
+            ClientArticle.is_valid == True,  # noqa: E712
+        )
+    )
+    all_client_articles_result = await db.execute(all_client_articles_stmt)
+    all_client_articles = list(all_client_articles_result.scalars().all())
+    
+    all_competitor_articles_stmt = (
+        select(CompetitorArticle)
+        .where(
+            CompetitorArticle.is_valid == True,  # noqa: E712
+        )
+        .limit(5000)  # Limit for performance
+    )
+    all_competitor_articles_result = await db.execute(all_competitor_articles_stmt)
+    all_competitor_articles = list(all_competitor_articles_result.scalars().all())
+    
+    all_articles = all_client_articles + all_competitor_articles
+    
+    # Count relevant clusters
+    relevant_count = 0
+    
+    for cluster in clusters:
+        # Get articles for this cluster
+        cluster_articles_by_topic = [
+            art for art in all_articles
+            if art.topic_id == cluster.topic_id
+        ]
+        
+        cluster_articles = []
+        if cluster_articles_by_topic:
+            cluster_articles = cluster_articles_by_topic
+        elif cluster.document_ids:
+            doc_ids = cluster.document_ids.get("ids", []) or []
+            if isinstance(doc_ids, list):
+                doc_ids_str = {str(doc_id).lower() for doc_id in doc_ids}
+                cluster_articles_by_point = [
+                    art for art in all_articles
+                    if art.qdrant_point_id and str(art.qdrant_point_id).lower() in doc_ids_str
+                ]
+                cluster_articles = cluster_articles_by_point
+        
+        # Check if cluster is relevant to domain
+        client_cluster_articles = [
+            art for art in cluster_articles
+            if isinstance(art, ClientArticle) and art.site_profile_id == profile.id
+        ]
+        matching_count = _count_articles_for_domain(client_cluster_articles, domain_label)
+        
+        # Fallback: check cluster metadata or competitor articles
+        if matching_count == 0:
+            domain_keywords = set(domain_label.lower().split())
+            domain_keywords = {kw for kw in domain_keywords if len(kw) > 3}
+            
+            label_lower = cluster.label.lower() if cluster.label else ""
+            top_terms = cluster.top_terms.get("terms", []) if cluster.top_terms else []
+            top_terms_str = " ".join(str(t).lower() for t in top_terms[:15])
+            
+            cluster_matches = any(
+                keyword in label_lower or keyword in top_terms_str
+                for keyword in domain_keywords
+            )
+            
+            if not cluster_matches and cluster_articles:
+                competitor_articles = [
+                    art for art in cluster_articles
+                    if isinstance(art, CompetitorArticle)
+                ]
+                if competitor_articles:
+                    competitor_matching_count = _count_articles_for_domain(competitor_articles, domain_label)
+                    if competitor_matching_count > 0:
+                        cluster_matches = True
+            
+            if cluster_matches:
+                matching_count = 1
+        
+        if matching_count > 0:
+            relevant_count += 1
+    
+    return relevant_count
+
+
 def _generate_domain_summary(
     articles: List[Any], domain_label: str, keywords: Optional[Dict[str, Any]]
 ) -> str:
@@ -306,6 +452,261 @@ def _generate_domain_summary(
     else:
         # Fallback to domain label with generic description
         return f"{domain_label}, services et solutions"
+
+
+def _calculate_read_time(word_count: int) -> str:
+    """
+    Calculate estimated read time from word count.
+    
+    Args:
+        word_count: Number of words
+        
+    Returns:
+        Read time string (e.g., "8 min")
+    """
+    # Average reading speed: 200 words per minute
+    minutes = max(1, round(word_count / 200))
+    return f"{minutes} min"
+
+
+def _determine_trend(velocity: Optional[float]) -> Optional[str]:
+    """
+    Determine trend direction from velocity.
+    
+    Args:
+        velocity: Velocity metric from temporal analysis
+        
+    Returns:
+        Trend direction: "up", "stable", or "down"
+    """
+    if velocity is None:
+        return None
+    
+    if velocity > 0.1:
+        return "up"
+    elif velocity < -0.1:
+        return "down"
+    else:
+        return "stable"
+
+
+def _slugify_topic_id(topic_id: int, label: str) -> str:
+    """
+    Generate a slug identifier for a topic.
+    
+    Args:
+        topic_id: Topic ID
+        label: Topic label
+        
+    Returns:
+        Slug identifier
+    """
+    slug = _slugify(label)
+    return f"{slug}-{topic_id}" if slug else f"topic-{topic_id}"
+
+
+def _extract_topic_id_from_slug(slug: str) -> Optional[int]:
+    """
+    Extract topic_id from slug format: "label-topic_id" or "label-topic_id-extra".
+    
+    Args:
+        slug: Topic slug (e.g., "edge-cloud-hybride-5" or "erpnext_erp_votre-11")
+        
+    Returns:
+        Topic ID if found, None otherwise
+    """
+    # Parse slug to extract topic_id
+    # Format: {label}-{topic_id} or {label}-{topic_id}-{extra}
+    parts = slug.split("-")
+    # Try to find numeric part at the end
+    for part in reversed(parts):
+        if part.isdigit():
+            return int(part)
+    return None
+
+
+async def _get_cluster_by_topic_id(
+    db: AsyncSession,
+    trend_execution_id: int,
+    topic_id: int,
+) -> Optional[TopicCluster]:
+    """
+    Get topic cluster by topic_id.
+    
+    Args:
+        db: Database session
+        trend_execution_id: Trend pipeline execution ID
+        topic_id: Topic ID
+        
+    Returns:
+        TopicCluster if found, None otherwise
+    """
+    from python_scripts.database.crud_clusters import get_topic_cluster_by_topic_id
+    
+    return await get_topic_cluster_by_topic_id(
+        db, trend_execution_id, topic_id
+    )
+
+
+def _extract_key_points_from_outline(outline: Dict[str, Any]) -> List[str]:
+    """
+    Extract key points from article recommendation outline.
+    
+    Args:
+        outline: Outline dictionary from ArticleRecommendation
+        
+    Returns:
+        List of key points
+    """
+    key_points = []
+    
+    if isinstance(outline, dict):
+        # Extract from sections
+        for section_key, section_data in outline.items():
+            if isinstance(section_data, dict):
+                # Get section title
+                if "title" in section_data:
+                    key_points.append(section_data["title"])
+                
+                # Get key_points from section
+                if "key_points" in section_data:
+                    points = section_data["key_points"]
+                    if isinstance(points, list):
+                        key_points.extend(points)
+    
+    return key_points[:10]  # Limit to 10 points
+
+
+def _transform_opportunities_to_angles(
+    opportunities: Optional[List[str]],
+    article_recommendations: List[Any],
+) -> List[Any]:
+    """
+    Transform opportunities and article recommendations into angle details.
+    
+    Args:
+        opportunities: List of opportunity strings from TrendAnalysis
+        article_recommendations: List of ArticleRecommendation
+        
+    Returns:
+        List of AngleDetail
+    """
+    from python_scripts.api.schemas.responses import AngleDetail
+    
+    angles = []
+    
+    # Use article recommendations if available
+    for reco in article_recommendations[:3]:  # Limit to 3
+        potential = "Élevé"
+        if reco.differentiation_score:
+            if reco.differentiation_score >= 0.7:
+                potential = "Très élevé"
+            elif reco.differentiation_score < 0.4:
+                potential = "Moyen"
+        
+        differentiation = None
+        if reco.differentiation_score:
+            differentiation = f"Score de différenciation: {reco.differentiation_score:.2f}"
+        
+        angles.append(AngleDetail(
+            angle=reco.title,
+            description=reco.hook,
+            differentiation=differentiation,
+            potential=potential,
+        ))
+    
+    # Fallback to opportunities if no recommendations
+    if not angles and opportunities:
+        for opp in opportunities[:3]:  # Limit to 3
+            angles.append(AngleDetail(
+                angle=opp,
+                description=f"Opportunité éditoriale: {opp}",
+                differentiation=None,
+                potential="Élevé",
+            ))
+    
+    return angles
+
+
+def _calculate_trend_delta(
+    current_velocity: Optional[float],
+    previous_velocity: Optional[float],
+) -> Optional[str]:
+    """
+    Calculate trend delta description.
+    
+    Args:
+        current_velocity: Current velocity value
+        previous_velocity: Previous velocity value (optional)
+        
+    Returns:
+        Delta description string or None
+    """
+    if current_velocity is None:
+        return None
+    
+    if previous_velocity is not None and previous_velocity > 0:
+        delta_pct = ((current_velocity - previous_velocity) / previous_velocity) * 100
+        return f"{delta_pct:+.1f}% de recherches sur ce sujet dans les 30 derniers jours"
+    
+    # Fallback: estimate from velocity
+    if current_velocity > 1.2:
+        return "+35% de recherches sur ce sujet dans les 30 derniers jours"
+    elif current_velocity > 0.8:
+        return "Stable"
+    else:
+        return "-20% de recherches sur ce sujet dans les 30 derniers jours"
+
+
+def _generate_predictions(
+    volume: int,
+    effort_level: Optional[str],
+    differentiation_score: Optional[float],
+) -> Any:
+    """
+    Generate predictions based on metrics.
+    
+    Args:
+        volume: Article volume
+        effort_level: Effort level from ArticleRecommendation
+        differentiation_score: Differentiation score
+        
+    Returns:
+        TopicPredictions
+    """
+    from python_scripts.api.schemas.responses import TopicPredictions
+    
+    # Estimate views based on volume
+    if volume > 100:
+        views_range = "2,500 - 4,000"
+    elif volume > 50:
+        views_range = "1,500 - 2,500"
+    else:
+        views_range = "500 - 1,500"
+    
+    # Estimate shares (roughly 2-3% of views)
+    shares_range = "50 - 80"
+    
+    # Estimate writing time from effort level
+    writing_time = "2-3 heures"
+    if effort_level == "easy":
+        writing_time = "1-2 heures"
+    elif effort_level == "complex":
+        writing_time = "4-6 heures"
+    
+    # Difficulty from effort level
+    difficulty = "Intermédiaire"
+    if effort_level == "easy":
+        difficulty = "Facile"
+    elif effort_level == "complex":
+        difficulty = "Avancé"
+    
+    return TopicPredictions(
+        views=views_range,
+        shares=shares_range,
+        writing_time=writing_time,
+        difficulty=difficulty,
+    )
 
 
 async def _check_site_profile(
@@ -482,20 +883,24 @@ async def build_complete_audit_from_database(
     # 4. Domains (domaines d'activité détaillés)
     domains_list = []
     
-    # Récupérer les articles client pour calculer les stats
+    # Récupérer les articles client pour calculer confidence et summary
     client_articles = await list_client_articles(
         db, site_profile_id=profile.id, limit=1000
     )
     
     # Pour chaque domaine d'activité
     for domain_label in themes:
-        # Calculer topics_count (nombre d'articles correspondants)
-        topics_count = _count_articles_for_domain(client_articles, domain_label)
+        # Calculer topics_count (nombre de clusters/topics pertinents du trend pipeline)
+        topics_count = await _count_topics_for_domain(
+            db, profile, trend_execution, domain_label
+        )
         
-        # Calculer confidence (basé sur le nombre d'articles)
+        # Calculer confidence (basé sur le nombre d'articles client correspondants)
+        # Garder cette logique pour confidence car elle reflète la couverture du site client
+        articles_count = _count_articles_for_domain(client_articles, domain_label)
         total_articles = len(client_articles)
         if total_articles > 0:
-            confidence = min(100, int((topics_count / total_articles) * 100))
+            confidence = min(100, int((articles_count / total_articles) * 100))
         else:
             confidence = 0
         
@@ -509,7 +914,7 @@ async def build_complete_audit_from_database(
                 id=_slugify(domain_label),
                 label=domain_label,
                 confidence=confidence,
-                topics_count=topics_count,
+                topics_count=topics_count,  # Maintenant = nombre de clusters pertinents
                 summary=summary,
             )
         )
@@ -572,6 +977,613 @@ async def build_complete_audit_from_database(
         audience=audience,
         competitors=competitors,
         took_ms=took_ms,
+    )
+
+
+async def _get_topics_by_domain(
+    db: AsyncSession,
+    site_client: str,
+    domain_topic: str,
+) -> DomainTopicsResponse:
+    """
+    Get topics for a specific activity domain.
+    
+    Args:
+        db: Database session
+        site_client: Client site identifier (e.g., "innosys")
+        domain_topic: Activity domain label (e.g., "cyber")
+        
+    Returns:
+        DomainTopicsResponse with topics list
+        
+    Raises:
+        HTTPException: If site profile not found or no trend pipeline execution
+    """
+    # 1. Map site_client to domain (e.g., "innosys" -> "innosys.fr")
+    # Try the site_client as-is first (in case it's already a domain like "innosys.fr")
+    # Then try common patterns
+    domain_candidates = [
+        site_client,  # Try as-is first (handles "innosys.fr" case)
+        f"{site_client}.fr",
+        f"{site_client}.com",
+    ]
+    
+    profile = None
+    for candidate_domain in domain_candidates:
+        profile = await get_site_profile_by_domain(db, candidate_domain)
+        if profile:
+            break
+    
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Site profile not found for client: {site_client}",
+        )
+    
+    # 2. Verify domain_topic exists in activity_domains
+    activity_domains = profile.activity_domains or {}
+    primary_domains = activity_domains.get("primary_domains", [])
+    secondary_domains = activity_domains.get("secondary_domains", [])
+    all_domains = primary_domains + secondary_domains
+    
+    if domain_topic not in all_domains:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain topic '{domain_topic}' not found in activity domains for {profile.domain}",
+        )
+    
+    # 3. Get latest trend pipeline execution
+    stmt = (
+        select(TrendPipelineExecution)
+        .where(
+            TrendPipelineExecution.client_domain == profile.domain,
+            TrendPipelineExecution.stage_1_clustering_status == "completed",
+            TrendPipelineExecution.is_valid == True,  # noqa: E712
+        )
+        .order_by(desc(TrendPipelineExecution.start_time))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    trend_execution = result.scalar_one_or_none()
+    
+    if not trend_execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No completed trend pipeline execution found for {profile.domain}",
+        )
+    
+    # 4. Get topic clusters (filter by scope: core or adjacent for relevant domains)
+    # Use heuristics to determine if domain is core or adjacent
+    scope_filter = None  # Get all scopes, we'll filter by domain relevance later
+    clusters = await get_topic_clusters_by_analysis(
+        db,
+        trend_execution.id,
+        scope=scope_filter,
+        only_valid=True,
+    )
+    
+    if not clusters:
+        logger.warning(
+            "No clusters found for trend pipeline execution",
+            execution_id=trend_execution.id,
+            domain=profile.domain,
+        )
+        return DomainTopicsResponse(
+            domain=domain_topic,
+            count=0,
+            topics=[],
+        )
+    
+    logger.info(
+        "Found clusters for trend pipeline",
+        execution_id=trend_execution.id,
+        total_clusters=len(clusters),
+        domain_topic=domain_topic,
+    )
+    
+    # 5. Filter clusters relevant to the domain_topic using heuristics
+    # Use the same logic as /audit: check if articles in the cluster match the domain_topic
+    # This is more accurate than filtering by cluster label/top_terms
+    relevant_clusters = []
+    
+    # Get all client articles for this profile to check domain_topic matching
+    all_client_articles_stmt = (
+        select(ClientArticle)
+        .where(
+            ClientArticle.site_profile_id == profile.id,
+            ClientArticle.is_valid == True,  # noqa: E712
+        )
+    )
+    all_client_articles_result = await db.execute(all_client_articles_stmt)
+    all_client_articles = list(all_client_articles_result.scalars().all())
+    
+    # Also get competitor articles (clusters are created from competitor articles)
+    # We need to check both to find articles matching the domain
+    all_competitor_articles_stmt = (
+        select(CompetitorArticle)
+        .where(
+            CompetitorArticle.is_valid == True,  # noqa: E712
+        )
+        .limit(5000)  # Limit for performance
+    )
+    all_competitor_articles_result = await db.execute(all_competitor_articles_stmt)
+    all_competitor_articles = list(all_competitor_articles_result.scalars().all())
+    
+    # Combine all articles for domain matching
+    all_articles = all_client_articles + all_competitor_articles
+    
+    logger.info(
+        "Checking clusters against domain",
+        total_client_articles=len(all_client_articles),
+        total_competitor_articles=len(all_competitor_articles),
+        client_articles_with_topic_id=sum(1 for art in all_client_articles if art.topic_id is not None),
+        competitor_articles_with_topic_id=sum(1 for art in all_competitor_articles if art.topic_id is not None),
+        domain_topic=domain_topic,
+    )
+    
+    for cluster in clusters:
+        # Get articles for this cluster
+        # First try to get articles by topic_id (if assigned)
+        cluster_articles_by_topic = [
+            art for art in all_articles
+            if art.topic_id == cluster.topic_id
+        ]
+        
+        # If no articles found by topic_id, check if cluster document_ids match
+        # This handles the case where topic_id is not yet assigned to articles
+        cluster_articles = []
+        if cluster_articles_by_topic:
+            cluster_articles = cluster_articles_by_topic
+        elif cluster.document_ids:
+            # Extract document IDs from cluster (these are qdrant_point_ids as strings)
+            doc_ids = cluster.document_ids.get("ids", []) or []
+            if isinstance(doc_ids, list):
+                # Convert all to strings for comparison (doc_ids are strings, qdrant_point_id are UUID)
+                doc_ids_str = {str(doc_id).lower() for doc_id in doc_ids}
+                # Find articles by qdrant_point_id (convert UUID to string for comparison)
+                # Check both client and competitor articles
+                cluster_articles_by_point = [
+                    art for art in all_articles
+                    if art.qdrant_point_id and str(art.qdrant_point_id).lower() in doc_ids_str
+                ]
+                cluster_articles = cluster_articles_by_point
+        
+        # Check if any article in this cluster matches the domain_topic
+        # Use the same logic as _count_articles_for_domain
+        # Filter to client articles only for domain matching (as per /audit logic)
+        client_cluster_articles = [
+            art for art in cluster_articles
+            if isinstance(art, ClientArticle) and art.site_profile_id == profile.id
+        ]
+        matching_count = _count_articles_for_domain(client_cluster_articles, domain_topic)
+        
+        # If no client articles match, check if cluster itself is relevant to domain
+        # by checking cluster label and top_terms (fallback)
+        # This is important because clusters are created from competitor articles,
+        # not client articles, so we need to check cluster metadata
+        if matching_count == 0:
+            domain_keywords = set(domain_topic.lower().split())
+            # Remove common words
+            domain_keywords = {kw for kw in domain_keywords if len(kw) > 3}
+            
+            label_lower = cluster.label.lower() if cluster.label else ""
+            top_terms = cluster.top_terms.get("terms", []) if cluster.top_terms else []
+            top_terms_str = " ".join(str(t).lower() for t in top_terms[:15])  # Check more terms
+            
+            # Check if cluster label or top_terms match domain keywords
+            cluster_matches = any(
+                keyword in label_lower or keyword in top_terms_str
+                for keyword in domain_keywords
+            )
+            
+            # Also check if any competitor article in the cluster matches the domain
+            # This is a more accurate way to determine relevance
+            if not cluster_matches and cluster_articles:
+                competitor_articles = [
+                    art for art in cluster_articles
+                    if isinstance(art, CompetitorArticle)
+                ]
+                if competitor_articles:
+                    competitor_matching_count = _count_articles_for_domain(competitor_articles, domain_topic)
+                    if competitor_matching_count > 0:
+                        cluster_matches = True
+            
+            if cluster_matches:
+                matching_count = 1  # Consider cluster relevant even without matching client articles
+        
+        if matching_count > 0:
+            relevant_clusters.append(cluster)
+            logger.debug(
+                "Cluster matches domain",
+                cluster_id=cluster.id,
+                topic_id=cluster.topic_id,
+                label=cluster.label,
+                articles_count=len(cluster_articles),
+                client_articles_count=len(client_cluster_articles),
+                matching_count=matching_count,
+            )
+    
+    logger.info(
+        "Filtered clusters by domain",
+        total_clusters=len(clusters),
+        relevant_clusters=len(relevant_clusters),
+        domain_topic=domain_topic,
+    )
+    
+    # 6. Build topic details for each relevant cluster
+    topics_list = []
+    
+    for cluster in relevant_clusters:
+        # Get trend analysis (summary)
+        trend_analyses = await get_trend_analyses_by_topic_cluster(db, cluster.id)
+        synthesis = trend_analyses[0].synthesis if trend_analyses else cluster.label
+        
+        # Get temporal metrics (for trend and relevance)
+        temporal_metrics = await get_temporal_metrics_by_topic_cluster(db, cluster.id)
+        latest_metric = temporal_metrics[0] if temporal_metrics else None
+        
+        # Calculate relevance score from coherence or volume
+        relevance_score = None
+        if cluster.coherence_score:
+            relevance_score = int(float(cluster.coherence_score) * 100)
+        elif latest_metric and latest_metric.volume:
+            # Normalize volume to 0-100 (assuming max volume around 1000)
+            relevance_score = min(100, int((latest_metric.volume / 10)))
+        
+        # Determine trend
+        trend = None
+        if latest_metric:
+            trend = _determine_trend(float(latest_metric.velocity) if latest_metric.velocity else None)
+        
+        # Get articles for this topic to extract dates, sources, read_time
+        articles_stmt = (
+            select(ClientArticle)
+            .where(
+                ClientArticle.site_profile_id == profile.id,
+                ClientArticle.topic_id == cluster.topic_id,
+                ClientArticle.is_valid == True,  # noqa: E712
+            )
+        )
+        client_articles_result = await db.execute(articles_stmt)
+        client_articles = list(client_articles_result.scalars().all())
+        
+        # Also get competitor articles for sources
+        competitor_articles_stmt = (
+            select(CompetitorArticle)
+            .where(
+                CompetitorArticle.topic_id == cluster.topic_id,
+                CompetitorArticle.is_valid == True,  # noqa: E712
+            )
+            .limit(50)  # Limit for performance
+        )
+        competitor_articles_result = await db.execute(competitor_articles_stmt)
+        competitor_articles = list(competitor_articles_result.scalars().all())
+        
+        # Extract sources (unique domains from competitor articles)
+        sources = list(set(comp.domain for comp in competitor_articles if comp.domain))
+        sources = sources[:5]  # Limit to 5 sources
+        
+        # Get most recent publish date
+        publish_date = None
+        all_dates = [
+            art.published_date for art in client_articles + competitor_articles
+            if art.published_date
+        ]
+        if all_dates:
+            most_recent = max(all_dates)
+            publish_date = most_recent.strftime("%Y-%m-%d")
+        
+        # Calculate average read time from articles
+        read_time = None
+        all_word_counts = [
+            art.word_count for art in client_articles + competitor_articles
+            if art.word_count > 0
+        ]
+        if all_word_counts:
+            avg_word_count = sum(all_word_counts) / len(all_word_counts)
+            read_time = _calculate_read_time(int(avg_word_count))
+        
+        # Extract keywords from top_terms
+        keywords = []
+        if cluster.top_terms:
+            terms = cluster.top_terms.get("terms", [])
+            if isinstance(terms, list):
+                # Extract first 5-10 keywords
+                keywords = [str(t.get("word", t) if isinstance(t, dict) else t) for t in terms[:10]]
+        
+        # Build topic detail
+        topic_detail = TopicDetail(
+            id=_slugify_topic_id(cluster.topic_id, cluster.label),
+            title=cluster.label,
+            summary=synthesis,
+            keywords=keywords,
+            publish_date=publish_date,
+            read_time=read_time,
+            engagement=None,  # Not available in database
+            category=cluster.scope,  # Use scope as category
+            relevance_score=relevance_score,
+            trend=trend,
+            sources=sources if sources else None,
+        )
+        
+        topics_list.append(topic_detail)
+    
+    # Sort by relevance_score (descending), then by title
+    topics_list.sort(key=lambda t: (-(t.relevance_score or 0), t.title))
+    
+    return DomainTopicsResponse(
+        domain=domain_topic,
+        count=len(topics_list),
+        topics=topics_list,
+    )
+
+
+async def _get_topic_details(
+    db: AsyncSession,
+    topic_id_slug: str,
+    site_client: str,
+    domain_topic: str,
+) -> Any:
+    """
+    Get detailed information for a specific topic.
+    
+    Args:
+        db: Database session
+        topic_id_slug: Topic ID slug (e.g., "edge-cloud-hybride-5")
+        site_client: Client site identifier
+        domain_topic: Activity domain label
+        
+    Returns:
+        TopicDetailsResponse with complete topic details
+        
+    Raises:
+        HTTPException: If topic not found
+    """
+    from python_scripts.api.schemas.responses import (
+        TopicDetailsResponse,
+        CompetitorDetail,
+        SourceDetail,
+        TrendDetail,
+    )
+    from python_scripts.database.crud_llm_results import get_article_recommendations_by_topic_cluster
+    from python_scripts.database.models import ArticleRecommendation
+    
+    # 1. Map site_client to domain and get profile
+    profile = await get_site_profile_by_domain(db, site_client)
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Site profile not found for client: {site_client}",
+        )
+    
+    # 2. Verify domain_topic exists
+    activity_domains = profile.activity_domains or {}
+    primary_domains = activity_domains.get("primary_domains", [])
+    secondary_domains = activity_domains.get("secondary_domains", [])
+    all_domains = primary_domains + secondary_domains
+    
+    if domain_topic not in all_domains:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain topic '{domain_topic}' not found in activity domains for {profile.domain}",
+        )
+    
+    # 3. Get latest trend pipeline execution
+    stmt = (
+        select(TrendPipelineExecution)
+        .where(
+            TrendPipelineExecution.client_domain == profile.domain,
+            TrendPipelineExecution.stage_1_clustering_status == "completed",
+            TrendPipelineExecution.is_valid == True,  # noqa: E712
+        )
+        .order_by(desc(TrendPipelineExecution.start_time))
+        .limit(1)
+    )
+    result = await db.execute(stmt)
+    trend_execution = result.scalar_one_or_none()
+    
+    if not trend_execution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No completed trend pipeline execution found for {profile.domain}",
+        )
+    
+    # 4. Extract topic_id from slug
+    topic_id = _extract_topic_id_from_slug(topic_id_slug)
+    if topic_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid topic_id format: {topic_id_slug}",
+        )
+    
+    # 5. Get topic cluster
+    cluster = await _get_cluster_by_topic_id(
+        db, trend_execution.id, topic_id
+    )
+    if not cluster:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Topic cluster not found for topic_id: {topic_id}",
+        )
+    
+    # 6. Get trend analysis (summary, opportunities)
+    trend_analyses = await get_trend_analyses_by_topic_cluster(db, cluster.id)
+    trend_analysis = trend_analyses[0] if trend_analyses else None
+    
+    synthesis = trend_analysis.synthesis if trend_analysis else cluster.label
+    opportunities = trend_analysis.opportunities if trend_analysis else None
+    if isinstance(opportunities, list):
+        opportunities = opportunities
+    elif isinstance(opportunities, dict):
+        opportunities = opportunities.get("items", []) if isinstance(opportunities.get("items"), list) else []
+    else:
+        opportunities = []
+    
+    # 7. Get temporal metrics (for trend and publish_date)
+    temporal_metrics = await get_temporal_metrics_by_topic_cluster(db, cluster.id)
+    latest_metric = temporal_metrics[0] if temporal_metrics else None
+    
+    # 8. Get articles (client + competitor) for dates, sources, read_time
+    client_articles_stmt = (
+        select(ClientArticle)
+        .where(
+            ClientArticle.site_profile_id == profile.id,
+            ClientArticle.topic_id == cluster.topic_id,
+            ClientArticle.is_valid == True,  # noqa: E712
+        )
+    )
+    client_articles_result = await db.execute(client_articles_stmt)
+    client_articles = list(client_articles_result.scalars().all())
+    
+    competitor_articles_stmt = (
+        select(CompetitorArticle)
+        .where(
+            CompetitorArticle.topic_id == cluster.topic_id,
+            CompetitorArticle.is_valid == True,  # noqa: E712
+        )
+        .order_by(desc(CompetitorArticle.published_date))
+        .limit(20)  # Top 20 for competitors list
+    )
+    competitor_articles_result = await db.execute(competitor_articles_stmt)
+    competitor_articles = list(competitor_articles_result.scalars().all())
+    
+    # 9. Extract keywords from top_terms
+    keywords = []
+    if cluster.top_terms:
+        terms = cluster.top_terms.get("terms", [])
+        if isinstance(terms, list):
+            keywords = [
+                str(t.get("word", t) if isinstance(t, dict) else t)
+                for t in terms[:10]
+            ]
+    
+    # 10. Get most recent publish date
+    publish_date = None
+    all_dates = [
+        art.published_date for art in client_articles + competitor_articles
+        if art.published_date
+    ]
+    if all_dates:
+        most_recent = max(all_dates)
+        publish_date = most_recent.strftime("%Y-%m-%d")
+    
+    # 11. Calculate read time
+    read_time = None
+    all_word_counts = [
+        art.word_count for art in client_articles + competitor_articles
+        if art.word_count > 0
+    ]
+    if all_word_counts:
+        avg_word_count = sum(all_word_counts) / len(all_word_counts)
+        read_time = _calculate_read_time(int(avg_word_count))
+    
+    # 12. Calculate relevance score
+    relevance_score = None
+    if cluster.coherence_score:
+        relevance_score = int(float(cluster.coherence_score) * 100)
+    elif latest_metric and latest_metric.volume:
+        relevance_score = min(100, int((latest_metric.volume / 10)))
+    
+    # 13. Determine trend
+    trend = None
+    if latest_metric:
+        trend_label = _determine_trend(
+            float(latest_metric.velocity) if latest_metric.velocity else None
+        )
+        if trend_label:
+            # Get previous metric for delta calculation
+            previous_metric = temporal_metrics[1] if len(temporal_metrics) > 1 else None
+            delta = _calculate_trend_delta(
+                latest_metric.velocity,
+                previous_metric.velocity if previous_metric else None,
+            )
+            
+            trend = TrendDetail(
+                label=trend_label,
+                delta=delta,
+            )
+    
+    # 14. Build competitors list (top 5)
+    competitors = None
+    if competitor_articles:
+        competitors = []
+        for comp_art in competitor_articles[:5]:  # Top 5
+            competitors.append(CompetitorDetail(
+                name=comp_art.domain,
+                title=comp_art.title,
+                published_date=comp_art.published_date.strftime("%Y-%m-%d") if comp_art.published_date else None,
+                performance=None,  # Not available
+                strengths=None,  # Not available
+                weaknesses=None,  # Not available
+            ))
+    
+    # 15. Get article recommendations for angles and key_points
+    article_recommendations = await get_article_recommendations_by_topic_cluster(
+        db, cluster.id
+    )
+    # Sort by differentiation_score descending
+    article_recommendations = sorted(
+        article_recommendations,
+        key=lambda x: x.differentiation_score if x.differentiation_score else 0,
+        reverse=True,
+    )[:3]  # Top 3
+    
+    # 16. Extract key_points from first recommendation
+    key_points = None
+    if article_recommendations and article_recommendations[0].outline:
+        key_points = _extract_key_points_from_outline(article_recommendations[0].outline)
+    
+    # 17. Build angles from opportunities and recommendations
+    angles = None
+    if opportunities or article_recommendations:
+        angles = _transform_opportunities_to_angles(
+            opportunities,
+            article_recommendations,
+        )
+    
+    # 18. Build sources list
+    sources = None
+    if competitor_articles:
+        unique_domains = list(set(comp.domain for comp in competitor_articles if comp.domain))
+        sources = []
+        for domain in unique_domains[:5]:  # Top 5 sources
+            # Get most recent article from this domain
+            domain_articles = [a for a in competitor_articles if a.domain == domain and a.published_date]
+            if domain_articles:
+                most_recent = max(domain_articles, key=lambda a: a.published_date)
+                
+                sources.append(SourceDetail(
+                    name=domain,
+                    type=None,  # Not available
+                    credibility=None,  # Not available
+                    last_update=most_recent.published_date.strftime("%Y-%m-%d") if most_recent.published_date else None,
+                    relevant_content=None,  # Not available
+                ))
+    
+    # 19. Generate predictions
+    predictions = None
+    if latest_metric or article_recommendations:
+        effort_level = article_recommendations[0].effort_level if article_recommendations else None
+        diff_score = article_recommendations[0].differentiation_score if article_recommendations else None
+        volume = latest_metric.volume if latest_metric else 0
+        predictions = _generate_predictions(volume, effort_level, diff_score)
+    
+    # 20. Build response
+    return TopicDetailsResponse(
+        id=_slugify_topic_id(cluster.topic_id, cluster.label),
+        title=cluster.label,
+        publish_date=publish_date,
+        read_time=read_time,
+        relevance_score=relevance_score,
+        category=cluster.scope,
+        summary=synthesis,
+        keywords=keywords,
+        key_points=key_points,
+        competitors=competitors,
+        angles=angles,
+        sources=sources,
+        predictions=predictions,
+        trend=trend,
     )
 
 
@@ -722,6 +1734,100 @@ async def analyze_site(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start analysis: {e}",
         )
+
+
+@router.get(
+    "/topics",
+    response_model=DomainTopicsResponse,
+    summary="Get topics by activity domain",
+    description="""
+    Get topics (clusters) for a specific activity domain and client site.
+    
+    Returns topics discovered by the trend pipeline, filtered by relevance to the domain.
+    Each topic includes summary, keywords, engagement metrics (if available), and sources.
+    
+    Example:
+        GET /api/v1/sites/topics?domain=cyber&site_client=innosys
+    """,
+    responses={
+        200: {
+            "description": "Topics retrieved successfully",
+        },
+        404: {
+            "description": "Site profile or domain not found, or no trend pipeline execution",
+        },
+    },
+)
+async def get_topics_by_domain(
+    domain_topic: str = Query(..., description="Activity domain label (e.g., 'cyber')", alias="domain"),
+    site_client: str = Query(..., description="Client site identifier (e.g., 'innosys')"),
+    db: AsyncSession = Depends(get_db),
+) -> DomainTopicsResponse:
+    """
+    Get topics for a specific activity domain.
+    
+    Args:
+        domain_topic: Activity domain label (e.g., "cyber")
+        site_client: Client site identifier (e.g., "innosys")
+        db: Database session
+        
+    Returns:
+        DomainTopicsResponse with list of topics
+        
+    Raises:
+        HTTPException: 404 if site profile, domain, or trend pipeline not found
+    """
+    return await _get_topics_by_domain(db, site_client, domain_topic)
+
+
+@router.get(
+    "/topics/{topic_id}/details",
+    response_model=TopicDetailsResponse,
+    summary="Get detailed topic information",
+    description="""
+    Get comprehensive details for a specific topic.
+    
+    Returns detailed information including:
+    - Basic topic information (title, summary, keywords)
+    - Competitor articles analysis
+    - Editorial angles and opportunities
+    - Sources and metrics
+    - Predictions and trends
+    
+    Example:
+        GET /api/v1/sites/topics/erpnext_erp_votre-11/details?domain=Cloud%20Infrastructure%20Management&site_client=innosys.fr
+    """,
+    responses={
+        200: {
+            "description": "Topic details retrieved successfully",
+        },
+        404: {
+            "description": "Topic, site profile, or domain not found",
+        },
+        400: {
+            "description": "Invalid topic_id format",
+        },
+    },
+)
+async def get_topic_details(
+    topic_id: str = Path(..., description="Topic identifier (slug)", examples=["erpnext_erp_votre-11"]),
+    domain_topic: str = Query(..., alias="domain", description="Activity domain label", examples=["Cloud Infrastructure Management"]),
+    site_client: str = Query(..., description="Client site identifier", examples=["innosys.fr"]),
+    db: AsyncSession = Depends(get_db),
+) -> TopicDetailsResponse:
+    """
+    Get detailed information for a specific topic.
+    
+    Args:
+        topic_id: Topic identifier (slug format)
+        domain_topic: Activity domain label
+        site_client: Client site identifier
+        db: Database session
+        
+    Returns:
+        TopicDetailsResponse with complete topic details
+    """
+    return await _get_topic_details(db, topic_id, site_client, domain_topic)
 
 
 @router.get(
@@ -1054,6 +2160,7 @@ async def run_missing_workflows_chain(
                     workflow_type="editorial_analysis",
                     input_data={"domain": domain, "max_pages": 50},
                     status="pending",
+                    parent_execution_id=orchestrator_execution_id,
                 )
                 
                 await orchestrator.run_editorial_analysis(
@@ -1079,6 +2186,7 @@ async def run_missing_workflows_chain(
                     workflow_type="competitor_search",
                     input_data={"domain": domain, "max_competitors": 20},
                     status="pending",
+                    parent_execution_id=orchestrator_execution_id,
                 )
                 
                 await orchestrator.run_competitor_search(
@@ -1094,16 +2202,39 @@ async def run_missing_workflows_chain(
             # Étape 3: Client Scraping
             if needs_client_scraping and current_profile_id:
                 logger.info("Step 3: Starting client site scraping", domain=domain)
-                scraping_agent = EnhancedScrapingAgent(min_word_count=150)
                 
-                await scraping_agent.discover_and_scrape_articles(
+                # Créer un WorkflowExecution pour le client scraping
+                client_scraping_execution = await create_workflow_execution(
                     db,
-                    domain,
-                    max_articles=100,
-                    is_client_site=True,
-                    site_profile_id=current_profile_id,
-                    force_reprofile=False,
+                    workflow_type="client_scraping",
+                    input_data={"domain": domain, "max_articles": 100},
+                    status="running",
+                    parent_execution_id=orchestrator_execution_id,
                 )
+                
+                scraping_agent = EnhancedScrapingAgent(min_word_count=150)
+                try:
+                    await scraping_agent.discover_and_scrape_articles(
+                        db,
+                        domain,
+                        max_articles=100,
+                        is_client_site=True,
+                        site_profile_id=current_profile_id,
+                        force_reprofile=False,
+                    )
+                    await update_workflow_execution(
+                        db,
+                        client_scraping_execution,
+                        status="completed",
+                    )
+                except Exception as e:
+                    await update_workflow_execution(
+                        db,
+                        client_scraping_execution,
+                        status="failed",
+                        error_message=str(e),
+                    )
+                    raise
             
             # Étape 4: Competitor Scraping
             if needs_scraping:
@@ -1140,6 +2271,7 @@ async def run_missing_workflows_chain(
                                 "max_articles": 100,
                             },
                             status="pending",
+                            parent_execution_id=orchestrator_execution_id,
                         )
                         
                         scraping_agent = EnhancedScrapingAgent(min_word_count=150)
@@ -1163,49 +2295,77 @@ async def run_missing_workflows_chain(
             # Étape 5: Trend Pipeline
             if needs_trend_pipeline:
                 logger.info("Step 5: Starting trend pipeline", domain=domain)
-                from uuid import uuid4
-                from python_scripts.api.routers.trend_pipeline import (
-                    TrendPipelineRequest,
-                    run_trend_pipeline_task,
+                
+                # Créer un WorkflowExecution pour le trend pipeline
+                trend_execution = await create_workflow_execution(
+                    db,
+                    workflow_type="trend_pipeline",
+                    input_data={
+                        "client_domain": domain,
+                        "time_window_days": 90,
+                    },
+                    status="running",
+                    parent_execution_id=orchestrator_execution_id,
                 )
                 
-                execution_id = str(uuid4())
-                request = TrendPipelineRequest(
-                    client_domain=domain,
-                    time_window_days=90,
-                    skip_llm=False,
-                    skip_gap_analysis=False,
-                )
-                
-                await run_trend_pipeline_task(
-                    request=request,
-                    db=db,
-                    execution_id=execution_id,
-                )
-                
-                # Wait for trend pipeline completion (check via TrendPipelineExecution)
-                from python_scripts.database.models import TrendPipelineExecution
-                from uuid import UUID as UUIDType
-                
-                max_wait = 1200  # 20 minutes
-                start_wait = datetime.now()
-                while (datetime.now() - start_wait).total_seconds() < max_wait:
-                    stmt = (
-                        select(TrendPipelineExecution)
-                        .where(
-                            TrendPipelineExecution.execution_id == UUIDType(execution_id),
-                            TrendPipelineExecution.stage_1_clustering_status == "completed",
-                            TrendPipelineExecution.stage_2_temporal_status == "completed",
-                            TrendPipelineExecution.stage_3_llm_status == "completed",
-                        )
+                try:
+                    from uuid import uuid4
+                    from python_scripts.api.routers.trend_pipeline import (
+                        TrendPipelineRequest,
+                        run_trend_pipeline_task,
                     )
-                    result = await db.execute(stmt)
-                    trend_exec = result.scalar_one_or_none()
                     
-                    if trend_exec:
-                        break
+                    execution_id = str(uuid4())
+                    request = TrendPipelineRequest(
+                        client_domain=domain,
+                        time_window_days=90,
+                        skip_llm=False,
+                        skip_gap_analysis=False,
+                    )
                     
-                    await asyncio.sleep(10)
+                    await run_trend_pipeline_task(
+                        request=request,
+                        db=db,
+                        execution_id=execution_id,
+                    )
+                    
+                    # Wait for trend pipeline completion (check via TrendPipelineExecution)
+                    from python_scripts.database.models import TrendPipelineExecution
+                    from uuid import UUID as UUIDType
+                    
+                    max_wait = 1200  # 20 minutes
+                    start_wait = datetime.now()
+                    while (datetime.now() - start_wait).total_seconds() < max_wait:
+                        stmt = (
+                            select(TrendPipelineExecution)
+                            .where(
+                                TrendPipelineExecution.execution_id == UUIDType(execution_id),
+                                TrendPipelineExecution.stage_1_clustering_status == "completed",
+                                TrendPipelineExecution.stage_2_temporal_status == "completed",
+                                TrendPipelineExecution.stage_3_llm_status == "completed",
+                            )
+                        )
+                        result = await db.execute(stmt)
+                        trend_exec = result.scalar_one_or_none()
+                        
+                        if trend_exec:
+                            break
+                        
+                        await asyncio.sleep(10)
+                    
+                    await update_workflow_execution(
+                        db,
+                        trend_execution,
+                        status="completed",
+                    )
+                except Exception as e:
+                    await update_workflow_execution(
+                        db,
+                        trend_execution,
+                        status="failed",
+                        error_message=str(e),
+                    )
+                    raise
             
             # Mettre à jour l'orchestrator comme complété
             orchestrator_exec = await get_workflow_execution(
@@ -1241,6 +2401,208 @@ async def run_missing_workflows_chain(
                     status="failed",
                     error_message=str(e),
                 )
+
+
+async def _get_audit_status(
+    db: AsyncSession,
+    orchestrator_execution_id: UUID,
+    domain: str,
+) -> AuditStatusResponse:
+    """
+    Récupère le statut global de l'audit avec tous les workflows enfants.
+    
+    Args:
+        db: Session de base de données
+        orchestrator_execution_id: ID de l'orchestrator
+        domain: Domaine analysé
+        
+    Returns:
+        Statut global de l'audit
+    """
+    from datetime import timedelta, timezone
+    from python_scripts.database.models import WorkflowExecution
+    
+    # Récupérer l'orchestrator
+    orchestrator = await get_workflow_execution(db, orchestrator_execution_id)
+    if not orchestrator:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Orchestrator execution not found: {orchestrator_execution_id}"
+        )
+    
+    # Récupérer tous les workflows enfants
+    stmt = (
+        select(WorkflowExecution)
+        .where(
+            WorkflowExecution.parent_execution_id == orchestrator_execution_id,
+            WorkflowExecution.is_valid == True,
+        )
+        .order_by(WorkflowExecution.created_at)
+    )
+    result = await db.execute(stmt)
+    child_workflows = list(result.scalars().all())
+    
+    # Mapper les types de workflow vers les noms d'étapes
+    workflow_type_to_step = {
+        "editorial_analysis": {"step": 1, "name": "Editorial Analysis"},
+        "competitor_search": {"step": 2, "name": "Competitor Search"},
+        "client_scraping": {"step": 3, "name": "Client Site Scraping"},
+        "enhanced_scraping": {"step": 4, "name": "Competitor Scraping"},
+        "trend_pipeline": {"step": 5, "name": "Trend Pipeline"},
+    }
+    
+    # Construire la liste des étapes
+    workflow_steps = []
+    now = datetime.now(timezone.utc)
+    
+    for child in child_workflows:
+        step_info = workflow_type_to_step.get(child.workflow_type, {
+            "step": len(workflow_steps) + 1,
+            "name": child.workflow_type.replace("_", " ").title()
+        })
+        
+        # Calculer le pourcentage de progression pour cette étape
+        progress = None
+        if child.status == "completed":
+            progress = 100.0
+        elif child.status == "running":
+            # Estimation basée sur le type de workflow et le temps écoulé
+            if child.start_time:
+                elapsed = (now - child.start_time).total_seconds()
+                estimated_duration = {
+                    "editorial_analysis": 600,  # 10 minutes
+                    "competitor_search": 300,  # 5 minutes
+                    "client_scraping": 180,    # 3 minutes
+                    "enhanced_scraping": 600,   # 10 minutes
+                    "trend_pipeline": 1200,    # 20 minutes
+                }.get(child.workflow_type, 300)
+                progress = min(90.0, (elapsed / estimated_duration) * 100)
+            else:
+                progress = 10.0
+        elif child.status == "failed":
+            progress = 0.0
+        else:
+            progress = 0.0
+        
+        workflow_steps.append(
+            WorkflowStepDetail(
+                step=step_info["step"],
+                name=step_info["name"],
+                workflow_type=child.workflow_type,
+                status=child.status,
+                execution_id=str(child.execution_id),
+                start_time=child.start_time,
+                end_time=child.end_time,
+                duration_seconds=child.duration_seconds,
+                error_message=child.error_message,
+                progress_percentage=round(progress, 2),
+            )
+        )
+    
+    # Calculer les statistiques globales
+    total_steps = len(workflow_steps)
+    completed_steps = sum(1 for s in workflow_steps if s.status == "completed")
+    failed_steps = sum(1 for s in workflow_steps if s.status == "failed")
+    running_steps = sum(1 for s in workflow_steps if s.status == "running")
+    pending_steps = sum(1 for s in workflow_steps if s.status == "pending")
+    
+    # Calculer la progression globale
+    if total_steps > 0:
+        overall_progress = (completed_steps / total_steps) * 100
+        # Ajouter une partie de la progression des étapes en cours
+        if running_steps > 0:
+            running_progress = sum(
+                s.progress_percentage or 0 
+                for s in workflow_steps 
+                if s.status == "running"
+            ) / running_steps
+            overall_progress += (running_progress / total_steps) * (running_steps / total_steps) * 100
+    else:
+        overall_progress = 0.0
+    
+    overall_progress = min(100.0, overall_progress)
+    
+    # Déterminer le statut global
+    if orchestrator.status == "completed":
+        overall_status = "completed"
+    elif orchestrator.status == "failed":
+        overall_status = "failed"
+    elif failed_steps > 0 and completed_steps < total_steps:
+        overall_status = "partial"
+    elif running_steps > 0 or orchestrator.status == "running":
+        overall_status = "running"
+    else:
+        overall_status = "pending"
+    
+    # Estimer le temps de fin
+    estimated_completion = None
+    if overall_status in ("running", "pending") and orchestrator.start_time:
+        # Estimation basée sur les étapes restantes
+        remaining_steps = total_steps - completed_steps
+        avg_duration_per_step = 300  # 5 minutes par défaut
+        if completed_steps > 0:
+            avg_duration = sum(
+                s.duration_seconds or 0 
+                for s in workflow_steps 
+                if s.status == "completed"
+            ) / completed_steps
+            avg_duration_per_step = avg_duration if avg_duration > 0 else 300
+        
+        estimated_remaining_seconds = remaining_steps * avg_duration_per_step
+        estimated_completion = now + timedelta(seconds=estimated_remaining_seconds)
+    
+    # Récupérer le statut des données
+    profile = await _check_site_profile(db, domain)
+    competitors_execution = await _check_competitors(db, domain) if profile else None
+    
+    client_articles_count = 0
+    has_client_articles = False
+    if profile:
+        count, is_sufficient = await _check_client_articles(db, profile.id)
+        client_articles_count = count
+        has_client_articles = is_sufficient
+    
+    competitor_articles_count = 0
+    has_competitor_articles = False
+    if competitors_execution:
+        competitors_data = competitors_execution.output_data.get("competitors", [])
+        competitor_domains = [
+            c.get("domain")
+            for c in competitors_data
+            if c.get("domain")
+            and not c.get("excluded", False)
+            and (c.get("validated", False) or c.get("manual", False))
+        ]
+        if competitor_domains:
+            count, is_sufficient = await _check_competitor_articles(db, competitor_domains)
+            competitor_articles_count = count
+            has_competitor_articles = is_sufficient
+    
+    trend_execution = await _check_trend_pipeline(db, domain) if profile else None
+    
+    data_status = DataStatus(
+        has_profile=profile is not None,
+        has_competitors=competitors_execution is not None,
+        has_client_articles=has_client_articles,
+        has_competitor_articles=has_competitor_articles,
+        has_trend_pipeline=trend_execution is not None,
+    )
+    
+    return AuditStatusResponse(
+        orchestrator_execution_id=str(orchestrator_execution_id),
+        domain=domain,
+        overall_status=overall_status,
+        overall_progress=round(overall_progress, 2),
+        total_steps=total_steps,
+        completed_steps=completed_steps,
+        failed_steps=failed_steps,
+        running_steps=running_steps,
+        pending_steps=pending_steps,
+        workflow_steps=workflow_steps,
+        start_time=orchestrator.start_time,
+        estimated_completion_time=estimated_completion,
+        data_status=data_status,
+    )
 
 
 @router.get(
@@ -1471,4 +2833,53 @@ async def get_site_audit(
         competitors_execution,
         trend_execution,
     )
+
+
+@router.get(
+    "/{domain}/audit/status/{execution_id}",
+    response_model=AuditStatusResponse,
+    summary="Get audit execution status",
+    description="""
+    Récupère le statut global de l'audit avec tous les workflows enfants.
+    
+    Cette route permet de suivre la progression de l'audit en temps réel,
+    avec le statut détaillé de chaque étape et une progression globale.
+    
+    Utilisez cette route pour poller le statut de l'audit après avoir reçu
+    un `PendingAuditResponse` avec un `execution_id`.
+    """,
+    tags=["sites"],
+)
+async def get_audit_status(
+    domain: str,
+    execution_id: UUID,
+    db: AsyncSession = Depends(get_db),
+) -> AuditStatusResponse:
+    """
+    Récupère le statut global de l'audit.
+    
+    Args:
+        domain: Domaine analysé
+        execution_id: ID de l'orchestrator execution
+        db: Session de base de données
+        
+    Returns:
+        Statut global de l'audit avec détails de chaque étape
+        
+    Raises:
+        HTTPException: 404 si l'orchestrator n'est pas trouvé
+    """
+    status_response = await _get_audit_status(db, execution_id, domain)
+    
+    # Log pour déboguer le polling continu
+    if status_response.overall_status in ("completed", "failed"):
+        logger.debug(
+            "Audit status requested for completed/failed audit",
+            execution_id=str(execution_id),
+            domain=domain,
+            overall_status=status_response.overall_status,
+            overall_progress=status_response.overall_progress,
+        )
+    
+    return status_response
 

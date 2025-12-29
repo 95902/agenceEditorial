@@ -287,3 +287,7 @@ Pour valider la personnalisation :
 
 - **2025-01-25** : Création de l'issue, identification du problème des summaries génériques
 
+
+
+
+
