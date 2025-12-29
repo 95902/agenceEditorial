@@ -2330,13 +2330,25 @@ async def run_missing_workflows_chain(
                 
                 if competitor_exec:
                     competitors_data = competitor_exec.output_data.get("competitors", [])
-                    competitor_domains = [
-                        c["domain"]
-                        for c in competitors_data
-                        if c.get("validated", False) or c.get("manual", False)
-                    ]
-                    
+                    # Use same filter as trend pipeline for consistency
+                    competitor_domains = []
+                    for c in competitors_data:
+                        validation_status = c.get("validation_status", "validated")
+                        validated = c.get("validated", False)
+                        excluded = c.get("excluded", False)
+                        domain = c.get("domain")
+
+                        # Include only validated or manual competitors (not excluded)
+                        if domain and not excluded and (validation_status in ["validated", "manual"] or validated):
+                            competitor_domains.append(domain)
+
                     if competitor_domains:
+                        logger.info(
+                            "Starting scraping for validated competitors",
+                            domain=domain,
+                            competitor_count=len(competitor_domains),
+                            domains=competitor_domains[:10],  # Log first 10 domains
+                        )
                         scraping_execution = await create_workflow_execution(
                             db,
                             workflow_type="enhanced_scraping",
@@ -2348,7 +2360,7 @@ async def run_missing_workflows_chain(
                             status="pending",
                             parent_execution_id=orchestrator_execution_id,
                         )
-                        
+
                         scraping_agent = EnhancedScrapingAgent(min_word_count=150)
                         for comp_domain in competitor_domains:
                             await scraping_agent.discover_and_scrape_articles(
@@ -2360,11 +2372,24 @@ async def run_missing_workflows_chain(
                                 force_reprofile=False,
                                 client_domain=domain,
                             )
-                        
+
                         await update_workflow_execution(
                             db,
                             scraping_execution,
                             status="completed",
+                        )
+                    else:
+                        # No validated competitors found
+                        total_competitors = len(competitors_data)
+                        logger.warning(
+                            "Competitor scraping skipped: no validated competitors",
+                            domain=domain,
+                            total_competitors_found=total_competitors,
+                            validated_competitors=0,
+                            recommendation=(
+                                "Validate competitors via /api/v1/competitors/validate endpoint "
+                                "or enable auto-validation in competitor search."
+                            )
                         )
             
             # Étape 5: Trend Pipeline
