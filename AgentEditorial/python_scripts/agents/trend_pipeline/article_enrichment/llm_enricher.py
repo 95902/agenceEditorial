@@ -14,6 +14,7 @@ from python_scripts.agents.trend_pipeline.article_enrichment.prompts import (
     STATISTICS_INTEGRATION_PROMPT,
 )
 from python_scripts.agents.utils.llm_factory import create_llm
+from python_scripts.agents.utils.toon_formatter import create_toon_formatter
 from python_scripts.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -22,16 +23,19 @@ logger = get_logger(__name__)
 class ArticleLLMEnricher:
     """LLM-based article enrichment service."""
     
-    def __init__(self, config: Optional[ArticleEnrichmentConfig] = None):
+    def __init__(self, config: Optional[ArticleEnrichmentConfig] = None, enable_toon: bool = True):
         """
         Initialize the article LLM enricher.
-        
+
         Args:
             config: Article enrichment configuration
+            enable_toon: Whether to use TOON format for LLM prompts (default: True)
+                        TOON reduces token usage by 30-60% compared to JSON
         """
         self.config = config or ArticleEnrichmentConfig.default()
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._llm_cache: Dict[str, Any] = {}
+        self._toon_formatter = create_toon_formatter(enable_toon=enable_toon, log_savings=True)
     
     def _get_llm(self, model_name: str, timeout: int = 300):
         """Get or create LLM instance for a model."""
@@ -75,11 +79,10 @@ class ArticleLLMEnricher:
         Returns:
             Enriched outline structure
         """
-        # Normalize outline to string representation
-        if isinstance(outline, list):
-            outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
-        elif isinstance(outline, dict):
-            outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
+        # Normalize outline to string representation using TOON format
+        # TOON reduces token usage by 30-60% compared to JSON
+        if isinstance(outline, (list, dict)):
+            outline_str = self._toon_formatter.format_for_prompt(outline, label="Outline")
         else:
             outline_str = str(outline)
         
@@ -289,11 +292,10 @@ class ArticleLLMEnricher:
         Returns:
             Complete enriched article structure
         """
-        # Normalize outline
-        if isinstance(outline, list):
-            outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
-        elif isinstance(outline, dict):
-            outline_str = json.dumps(outline, ensure_ascii=False, indent=2)
+        # Normalize outline using TOON format
+        # TOON reduces token usage by 30-60% compared to JSON
+        if isinstance(outline, (list, dict)):
+            outline_str = self._toon_formatter.format_for_prompt(outline, label="Outline")
         else:
             outline_str = str(outline)
         

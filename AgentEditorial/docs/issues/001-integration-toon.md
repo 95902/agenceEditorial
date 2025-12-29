@@ -1,10 +1,11 @@
 # Issue #001 : Intégration TOON (Token-Oriented Object Notation)
 
-**Date de création** : 2025-01-25  
-**Statut** : En évaluation  
-**Priorité** : Moyenne  
-**Type** : Amélioration / Optimisation  
-**Labels** : `optimisation`, `llm`, `format-donnees`, `evaluation`
+**Date de création** : 2025-01-25
+**Date d'implémentation Phase 1** : 2025-12-29
+**Statut** : ✅ Phase 1 implémentée - En évaluation Phase 2
+**Priorité** : Moyenne
+**Type** : Amélioration / Optimisation
+**Labels** : `optimisation`, `llm`, `format-donnees`, `implemented`
 
 ---
 
@@ -409,6 +410,14 @@ id title hook effort
 ## Historique
 
 - **2025-01-25** : Création de l'issue, analyse complète des avantages/inconvénients
+- **2025-12-29** : Implémentation Phase 1 complétée
+  - ✅ Ajout dépendance `toons>=0.1.0` dans `pyproject.toml`
+  - ✅ Création `python_scripts/utils/toon_utils.py` avec fonctions de conversion
+  - ✅ Création `python_scripts/agents/utils/toon_formatter.py` pour formater les données LLM
+  - ✅ Modification `llm_enricher.py` pour utiliser TOON dans les prompts
+  - ✅ Création `tests/unit/test_toon_utils.py` avec tests complets
+  - ✅ Documentation complète dans `docs/TOON_IMPLEMENTATION.md`
+  - 📊 Prochaine étape : Phase 2 (Évaluation sur 2-4 semaines)
 
 
 

@@ -40,6 +40,8 @@ dependencies = [
     "crewai>=0.80.0",
     "crewai-tools>=0.14.0",
     "loguru>=0.7.0",
+    # TOON - Token-Oriented Object Notation for LLM optimization
+    "toons>=0.1.0",
     # Image Generation - Z-Image
     "diffusers>=0.30.0",
     "accelerate>=0.33.0",
