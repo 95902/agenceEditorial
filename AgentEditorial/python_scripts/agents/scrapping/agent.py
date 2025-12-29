@@ -685,12 +685,14 @@ class EnhancedScrapingAgent(BaseAgent):
         site_profile_id = kwargs.get("site_profile_id", None)
         domains = input_data.get("domains", [])
         max_articles_per_domain = input_data.get("max_articles_per_domain", 100)
+        client_domain = input_data.get("client_domain")
 
         logger.info(
             "Starting enhanced scraping workflow",
             execution_id=str(execution_id),
             domains=domains,
             max_articles_per_domain=max_articles_per_domain,
+            client_domain=client_domain,
         )
 
         all_results = {}
@@ -713,6 +715,7 @@ class EnhancedScrapingAgent(BaseAgent):
                     is_client_site=is_client_site,
                     site_profile_id=site_profile_id,
                     execution_id=execution_id,
+                    client_domain=client_domain,
                 )
 
                 all_results[domain] = result
