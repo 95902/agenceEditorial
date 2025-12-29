@@ -35,6 +35,7 @@ from python_scripts.utils.logging import (
     set_execution_context,
     clear_execution_context,
 )
+from python_scripts.utils.progress_logger import create_workflow_logger
 
 logger = get_logger(__name__)
 
@@ -289,7 +290,7 @@ class EditorialAnalysisOrchestrator:
             WorkflowError: If workflow fails
         """
         workflow_start_time = time.time()
-        
+
         # Create or get execution
         if execution_id:
             execution = await get_workflow_execution(self.db_session, execution_id)
@@ -303,11 +304,14 @@ class EditorialAnalysisOrchestrator:
                 status="pending",
             )
             execution_id = execution.execution_id
-        
+
         # Set execution context for logging
         self._current_execution_id = execution_id
         set_execution_context(execution_id=execution_id, agent_name=self.AGENT_NAME)
         self.audit.set_execution(execution_id)
+
+        # Create progress logger
+        progress = create_workflow_logger("editorial_analysis", show_details=False)
 
         try:
             # Transition to running
@@ -316,249 +320,250 @@ class EditorialAnalysisOrchestrator:
                 execution,
                 status="running",
             )
-            
-            # Log workflow start
+
+            # Log workflow start (audit only)
             await self._log_audit(
                 action="workflow_start",
                 status="info",
                 message=f"Starting editorial analysis for {domain}",
                 details={"domain": domain, "max_pages": max_pages},
             )
-            self.logger.info("Workflow started", execution_id=str(execution_id), domain=domain)
 
-            # Step 1: Discover URLs via sitemap
-            self._start_step_timer("discovering")
-            await self._send_progress(execution_id, "discovering", 10, f"Discovering URLs for {domain}...")
-            await self._log_audit("step_start", "info", "Discovering URLs via sitemap", step_name="discovering")
-            
-            sitemap_urls = await get_sitemap_urls(domain)
-            if not sitemap_urls:
-                sitemap_urls = [f"https://{domain}"]
-            urls_to_crawl = sitemap_urls[:max_pages]
-            
-            discovering_duration = self._get_step_duration("discovering")
-            await self._record_step_metrics(
-                "discovering",
-                discovering_duration,
-                additional_metrics=[
-                    {"metric_type": "urls_discovered", "metric_value": len(sitemap_urls), "metric_unit": "urls"},
-                    {"metric_type": "urls_to_crawl", "metric_value": len(urls_to_crawl), "metric_unit": "urls"},
-                ],
-            )
-            await self._log_audit(
-                "step_complete",
-                "success",
-                f"Discovered {len(sitemap_urls)} URLs, will crawl {len(urls_to_crawl)}",
-                step_name="discovering",
-                details={"urls_discovered": len(sitemap_urls), "urls_to_crawl": len(urls_to_crawl)},
-            )
+            # PHASE 1: Découverte
+            with progress.phase(0) as phase:
+                self._start_step_timer("discovering")
+                await self._send_progress(execution_id, "discovering", 10, f"Découverte des URLs...")
 
-            # Step 2: Crawl pages
-            self._start_step_timer("crawling")
-            await self._send_progress(execution_id, "crawling", 25, f"Crawling {len(urls_to_crawl)} pages...")
-            await self._log_audit("step_start", "info", f"Crawling {len(urls_to_crawl)} pages", step_name="crawling")
-            
-            crawled_pages = await crawl_multiple_pages(
-                urls_to_crawl,
-                db_session=self.db_session,
-                respect_robots=True,
-                use_cache=True,
-            )
+                phase.step("Recherche des URLs via sitemap")
+                sitemap_urls = await get_sitemap_urls(domain)
+                if not sitemap_urls:
+                    sitemap_urls = [f"https://{domain}"]
+                urls_to_crawl = sitemap_urls[:max_pages]
 
-            if not crawled_pages:
-                raise WorkflowError(f"No pages crawled for domain {domain}")
-            
-            crawling_duration = self._get_step_duration("crawling")
-            await self._record_step_metrics(
-                "crawling",
-                crawling_duration,
-                additional_metrics=[
-                    {"metric_type": "pages_crawled", "metric_value": len(crawled_pages), "metric_unit": "pages"},
-                ],
-            )
-            await self._log_audit(
-                "step_complete",
-                "success",
-                f"Crawled {len(crawled_pages)} pages",
-                step_name="crawling",
-                details={"pages_crawled": len(crawled_pages), "duration_seconds": crawling_duration},
-            )
+                phase.success(f"{len(sitemap_urls)} URLs découvertes", count=len(urls_to_crawl))
 
-            # Step 3: Combine content
-            self._start_step_timer("combining")
-            await self._send_progress(execution_id, "combining", 50, "Combining page content...")
-            
-            combined_content = "\n\n".join([page.get("text", "") for page in crawled_pages])
-            total_word_count = sum([page.get("word_count", 0) for page in crawled_pages])
-            
-            combining_duration = self._get_step_duration("combining")
-            await self._record_step_metrics(
-                "combining",
-                combining_duration,
-                additional_metrics=[
-                    {"metric_type": "total_word_count", "metric_value": total_word_count, "metric_unit": "words"},
-                ],
-            )
-
-            # Step 4: Run LLM analysis
-            self._start_step_timer("analyzing")
-            await self._send_progress(execution_id, "analyzing", 70, "Analyzing editorial style with LLM...")
-            await self._log_audit("step_start", "info", "Running LLM editorial analysis", step_name="analyzing")
-            
-            analysis_result = await self.analysis_agent.execute(
-                execution_id,
-                {
-                    "content": combined_content,
-                    "domain": domain,
-                },
-            )
-            
-            analyzing_duration = self._get_step_duration("analyzing")
-            await self._record_step_metrics("analyzing", analyzing_duration)
-            await self._log_audit(
-                "step_complete",
-                "success",
-                "LLM analysis completed",
-                step_name="analyzing",
-                details={"duration_seconds": analyzing_duration},
-            )
-
-            # Step 5: Get or create site profile
-            self._start_step_timer("saving")
-            await self._send_progress(execution_id, "saving", 85, "Saving site profile...")
-            
-            site_profile = await get_site_profile_by_domain(self.db_session, domain)
-            if not site_profile:
-                site_profile = await create_site_profile(
-                    self.db_session,
-                    domain,
-                    analysis_date=datetime.now(timezone.utc),
+                discovering_duration = self._get_step_duration("discovering")
+                await self._record_step_metrics(
+                    "discovering",
+                    discovering_duration,
+                    additional_metrics=[
+                        {"metric_type": "urls_discovered", "metric_value": len(sitemap_urls), "metric_unit": "urls"},
+                        {"metric_type": "urls_to_crawl", "metric_value": len(urls_to_crawl), "metric_unit": "urls"},
+                    ],
                 )
-            
-            # Step 5b: Generate image if requested (after site_profile is created)
-            if generate_image:
-                try:
-                    from python_scripts.agents.agent_image_generation import generate_article_image
-                    from python_scripts.database.crud_images import save_image_generation
-                    
-                    await self._log_audit("step_start", "info", "Generating editorial image", step_name="image_generation")
-                    await self._send_progress(execution_id, "generating_image", 88, "Generating editorial image...")
-                    
-                    # Generate image using the synthesized profile
-                    image_result = await generate_article_image(
-                        site_profile=analysis_result,  # Use the synthesized profile
-                        article_topic=domain,  # Use domain as topic
-                        style=image_style,
-                        max_retries=3,
-                    )
-                    
-                    # Extract Ideogram metadata from generation_params if available
-                    generation_params = image_result.generation_params or {}
-                    provider = generation_params.get("provider", "ideogram")
-                    ideogram_url = generation_params.get("ideogram_url")
-                    magic_prompt = generation_params.get("magic_prompt")
-                    style_type = generation_params.get("style_type")
-                    aspect_ratio = generation_params.get("aspect_ratio")
+                await self._log_audit(
+                    "step_complete",
+                    "success",
+                    f"Discovered {len(sitemap_urls)} URLs, will crawl {len(urls_to_crawl)}",
+                    step_name="discovering",
+                    details={"urls_discovered": len(sitemap_urls), "urls_to_crawl": len(urls_to_crawl)},
+                )
 
-                    # Save to database (note: article_id=None means it won't be saved due to FK constraint)
-                    saved_image = await save_image_generation(
-                        db=self.db_session,
-                        site_profile_id=site_profile.id,
-                        article_topic=domain,
-                        prompt_used=image_result.prompt_used,
-                        output_path=str(image_result.image_path),
-                        generation_params=generation_params,
-                        quality_score=image_result.quality_score,
-                        negative_prompt=image_result.negative_prompt,
-                        critique_details=image_result.critique_details,
-                        retry_count=image_result.retry_count,
-                        final_status=image_result.final_status,
-                        generation_time_seconds=None,
-                        article_id=None,  # Pas d'article associé pour l'instant
-                        provider=provider,
-                        ideogram_url=ideogram_url,
-                        magic_prompt=magic_prompt,
-                        style_type=style_type,
-                        aspect_ratio=aspect_ratio,
+            # PHASE 2: Extraction
+            with progress.phase(1) as phase:
+                self._start_step_timer("crawling")
+                await self._send_progress(execution_id, "crawling", 25, f"Extraction du contenu...")
+
+                phase.step(f"Crawling de {len(urls_to_crawl)} pages")
+                crawled_pages = await crawl_multiple_pages(
+                    urls_to_crawl,
+                    db_session=self.db_session,
+                    respect_robots=True,
+                    use_cache=True,
+                )
+
+                if not crawled_pages:
+                    raise WorkflowError(f"No pages crawled for domain {domain}")
+
+                phase.success(f"{len(crawled_pages)} pages crawlées", count=len(crawled_pages))
+
+                crawling_duration = self._get_step_duration("crawling")
+                await self._record_step_metrics(
+                    "crawling",
+                    crawling_duration,
+                    additional_metrics=[
+                        {"metric_type": "pages_crawled", "metric_value": len(crawled_pages), "metric_unit": "pages"},
+                    ],
+                )
+                await self._log_audit(
+                    "step_complete",
+                    "success",
+                    f"Crawled {len(crawled_pages)} pages",
+                    step_name="crawling",
+                    details={"pages_crawled": len(crawled_pages), "duration_seconds": crawling_duration},
+                )
+
+                # Combine content
+                self._start_step_timer("combining")
+                await self._send_progress(execution_id, "combining", 50, "Agrégation du contenu...")
+
+                phase.step("Extraction et agrégation du contenu")
+                combined_content = "\n\n".join([page.get("text", "") for page in crawled_pages])
+                total_word_count = sum([page.get("word_count", 0) for page in crawled_pages])
+
+                phase.success(f"{total_word_count} mots extraits", count=total_word_count)
+
+                combining_duration = self._get_step_duration("combining")
+                await self._record_step_metrics(
+                    "combining",
+                    combining_duration,
+                    additional_metrics=[
+                        {"metric_type": "total_word_count", "metric_value": total_word_count, "metric_unit": "words"},
+                    ],
+                )
+
+            # PHASE 3: Analyse IA
+            with progress.phase(2) as phase:
+                self._start_step_timer("analyzing")
+                await self._send_progress(execution_id, "analyzing", 70, "Analyse du style éditorial...")
+
+                phase.step("Analyse du style éditorial avec IA")
+                analysis_result = await self.analysis_agent.execute(
+                    execution_id,
+                    {
+                        "content": combined_content,
+                        "domain": domain,
+                    },
+                )
+
+                phase.success("Profil éditorial généré")
+
+                analyzing_duration = self._get_step_duration("analyzing")
+                await self._record_step_metrics("analyzing", analyzing_duration)
+                await self._log_audit(
+                    "step_complete",
+                    "success",
+                    "LLM analysis completed",
+                    step_name="analyzing",
+                    details={"duration_seconds": analyzing_duration},
+                )
+
+            # PHASE 4: Sauvegarde
+            with progress.phase(3) as phase:
+                self._start_step_timer("saving")
+                await self._send_progress(execution_id, "saving", 85, "Sauvegarde du profil...")
+
+                phase.step("Création du profil éditorial")
+                site_profile = await get_site_profile_by_domain(self.db_session, domain)
+                if not site_profile:
+                    site_profile = await create_site_profile(
+                        self.db_session,
+                        domain,
+                        analysis_date=datetime.now(timezone.utc),
                     )
-                    
-                    await self.db_session.commit()
-                    
-                    # Add image info to analysis result
-                    # Note: saved_image may be None if article_id is None (FK constraint)
-                    image_info = {
-                        "image_path": str(image_result.image_path),
-                        "quality_score": image_result.quality_score,
-                        "final_status": image_result.final_status,
-                        "retry_count": image_result.retry_count,
-                    }
-                    if saved_image is not None:
-                        image_info["image_id"] = saved_image.id
-                    
-                    analysis_result["image_generation"] = image_info
-                    
-                    if saved_image is not None:
-                        logger.info(
-                            "Image generation completed and saved",
-                            image_id=saved_image.id,
-                            site_profile_id=site_profile.id,
-                            execution_id=str(execution_id),
+
+                # Generate image if requested (after site_profile is created)
+                if generate_image:
+                    try:
+                        from python_scripts.agents.agent_image_generation import generate_article_image
+                        from python_scripts.database.crud_images import save_image_generation
+
+                        await self._log_audit("step_start", "info", "Generating editorial image", step_name="image_generation")
+                        await self._send_progress(execution_id, "generating_image", 88, "Génération de l'image...")
+
+                        phase.step("Génération de l'image éditoriale (optionnel)")
+
+                        # Generate image using the synthesized profile
+                        image_result = await generate_article_image(
+                            site_profile=analysis_result,  # Use the synthesized profile
+                            article_topic=domain,  # Use domain as topic
+                            style=image_style,
+                            max_retries=3,
                         )
-                    else:
-                        logger.info(
-                            "Image generation completed (not saved to DB: no article_id)",
-                            image_path=str(image_result.image_path),
+
+                        # Extract Ideogram metadata from generation_params if available
+                        generation_params = image_result.generation_params or {}
+                        provider = generation_params.get("provider", "ideogram")
+                        ideogram_url = generation_params.get("ideogram_url")
+                        magic_prompt = generation_params.get("magic_prompt")
+                        style_type = generation_params.get("style_type")
+                        aspect_ratio = generation_params.get("aspect_ratio")
+
+                        # Save to database (note: article_id=None means it won't be saved due to FK constraint)
+                        saved_image = await save_image_generation(
+                            db=self.db_session,
                             site_profile_id=site_profile.id,
-                            execution_id=str(execution_id),
+                            article_topic=domain,
+                            prompt_used=image_result.prompt_used,
+                            output_path=str(image_result.image_path),
+                            generation_params=generation_params,
+                            quality_score=image_result.quality_score,
+                            negative_prompt=image_result.negative_prompt,
+                            critique_details=image_result.critique_details,
+                            retry_count=image_result.retry_count,
+                            final_status=image_result.final_status,
+                            generation_time_seconds=None,
+                            article_id=None,  # Pas d'article associé pour l'instant
+                            provider=provider,
+                            ideogram_url=ideogram_url,
+                            magic_prompt=magic_prompt,
+                            style_type=style_type,
+                            aspect_ratio=aspect_ratio,
                         )
-                    
-                    await self._log_audit("step_complete", "success", "Image generated successfully", step_name="image_generation")
-                    
-                except Exception as image_error:
-                    logger.error(
-                        "Image generation failed",
-                        error=str(image_error),
-                        execution_id=str(execution_id),
-                    )
-                    # Don't fail the whole analysis if image generation fails
-                    analysis_result["image_generation"] = {
-                        "error": str(image_error),
-                        "status": "failed",
-                    }
-                    if self.db_session:
-                        await self.db_session.rollback()
-                    await self._log_audit("step_error", "error", f"Image generation failed: {image_error}", step_name="image_generation")
 
-            # Step 6: Update site profile with results
-            await update_site_profile(
-                self.db_session,
-                site_profile,
-                language_level=analysis_result.get("language_level"),
-                editorial_tone=analysis_result.get("editorial_tone"),
-                target_audience=analysis_result.get("target_audience"),
-                activity_domains=analysis_result.get("activity_domains"),
-                content_structure=analysis_result.get("content_structure"),
-                keywords=analysis_result.get("keywords"),
-                style_features=analysis_result.get("style_features"),
-                pages_analyzed=len(crawled_pages),
-                llm_models_used=analysis_result.get("llm_models_used"),
-            )
+                        await self.db_session.commit()
 
-            # Step 7: Save analysis results
-            await create_site_analysis_result(
-                self.db_session,
-                site_profile.id,
-                execution_id,
-                analysis_phase="synthesis",
-                phase_results=analysis_result,
-            )
-            
-            saving_duration = self._get_step_duration("saving")
-            await self._record_step_metrics("saving", saving_duration)
+                        # Add image info to analysis result
+                        # Note: saved_image may be None if article_id is None (FK constraint)
+                        image_info = {
+                            "image_path": str(image_result.image_path),
+                            "quality_score": image_result.quality_score,
+                            "final_status": image_result.final_status,
+                            "retry_count": image_result.retry_count,
+                        }
+                        if saved_image is not None:
+                            image_info["image_id"] = saved_image.id
 
-            # Step 8: Update execution status
-            await self._send_progress(execution_id, "completing", 95, "Finalizing analysis...")
-            
+                        analysis_result["image_generation"] = image_info
+
+                        phase.success("Image générée avec succès")
+
+                        await self._log_audit("step_complete", "success", "Image generated successfully", step_name="image_generation")
+
+                    except Exception as image_error:
+                        phase.warning(f"Génération d'image échouée: {str(image_error)}")
+                        # Don't fail the whole analysis if image generation fails
+                        analysis_result["image_generation"] = {
+                            "error": str(image_error),
+                            "status": "failed",
+                        }
+                        if self.db_session:
+                            await self.db_session.rollback()
+                        await self._log_audit("step_error", "error", f"Image generation failed: {image_error}", step_name="image_generation")
+
+                # Update site profile with results
+                phase.step("Mise à jour du profil avec les résultats")
+                await update_site_profile(
+                    self.db_session,
+                    site_profile,
+                    language_level=analysis_result.get("language_level"),
+                    editorial_tone=analysis_result.get("editorial_tone"),
+                    target_audience=analysis_result.get("target_audience"),
+                    activity_domains=analysis_result.get("activity_domains"),
+                    content_structure=analysis_result.get("content_structure"),
+                    keywords=analysis_result.get("keywords"),
+                    style_features=analysis_result.get("style_features"),
+                    pages_analyzed=len(crawled_pages),
+                    llm_models_used=analysis_result.get("llm_models_used"),
+                )
+
+                # Save analysis results
+                await create_site_analysis_result(
+                    self.db_session,
+                    site_profile.id,
+                    execution_id,
+                    analysis_phase="synthesis",
+                    phase_results=analysis_result,
+                )
+
+                phase.success("Profil sauvegardé avec succès")
+
+                saving_duration = self._get_step_duration("saving")
+                await self._record_step_metrics("saving", saving_duration)
+
+            # Finalize execution
+            await self._send_progress(execution_id, "completing", 95, "Finalisation de l'analyse...")
+
             workflow_duration = time.time() - workflow_start_time
             await update_workflow_execution(
                 self.db_session,
@@ -572,7 +577,7 @@ class EditorialAnalysisOrchestrator:
                 },
                 was_success=True,
             )
-            
+
             # Record total workflow metrics
             await self._record_metric("workflow_total_duration", workflow_duration, "seconds")
             await self._log_audit(
@@ -586,16 +591,15 @@ class EditorialAnalysisOrchestrator:
                     "duration_seconds": workflow_duration,
                 },
             )
-            
-            await self._send_progress(execution_id, "complete", 100, "Analysis completed successfully", status="completed")
 
-            self.logger.info(
-                "Workflow completed",
-                execution_id=str(execution_id),
-                domain=domain,
-                pages_crawled=len(crawled_pages),
-                duration_seconds=workflow_duration,
-            )
+            await self._send_progress(execution_id, "complete", 100, "Analyse terminée avec succès", status="completed")
+
+            # Complete progress logger
+            progress.complete(summary={
+                "Pages analysées": len(crawled_pages),
+                "Mots extraits": total_word_count,
+                "Profil ID": site_profile.id,
+            })
 
             return {
                 "execution_id": str(execution_id),
@@ -609,8 +613,11 @@ class EditorialAnalysisOrchestrator:
             workflow_duration = time.time() - workflow_start_time
             error_message = str(e)
             error_traceback = traceback.format_exc()
-            
-            # Log the error with full traceback
+
+            # Log the error with progress logger
+            progress.error(error_message, exception=e)
+
+            # Log the error with full traceback (audit)
             self.logger.error(
                 "Workflow failed",
                 execution_id=str(execution_id),
@@ -618,7 +625,7 @@ class EditorialAnalysisOrchestrator:
                 error=error_message,
                 traceback=error_traceback,
             )
-            
+
             # Create audit log for the error
             await self._log_audit_error(
                 action="workflow_failed",
@@ -628,7 +635,7 @@ class EditorialAnalysisOrchestrator:
                     "duration_seconds": workflow_duration,
                 },
             )
-            
+
             # Record failure metric
             await self._record_metric("workflow_failed_duration", workflow_duration, "seconds")
 
@@ -641,7 +648,7 @@ class EditorialAnalysisOrchestrator:
                     was_success=False,
                 )
                 await self._send_progress(
-                    execution_id, "error", 0, f"Workflow failed: {error_message}", status="failed"
+                    execution_id, "error", 0, f"Échec du workflow: {error_message}", status="failed"
                 )
             except (RuntimeError, Exception) as update_error:
                 # If session is invalid, try to create a new session for updating
