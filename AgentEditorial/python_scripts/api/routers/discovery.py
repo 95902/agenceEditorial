@@ -211,42 +211,38 @@ async def run_enhanced_scraping_background(
     status_code=status.HTTP_202_ACCEPTED,
     summary="Enhanced scraping with 4-phase discovery (competitors)",
     description="""
-    Start enhanced scraping with 4-phase discovery pipeline.
+    Start enhanced scraping with 4-phase discovery pipeline for **competitors only**.
 
-    This endpoint est principalement conçu pour le **scraping des concurrents**.
-    
+    This endpoint automatically fetches validated competitors for a client domain
+    and scrapes their articles into the proper Qdrant collection: `{client_domain}_competitor_articles`
+
+    **Pipeline phases:**
     1. **Phase 0 - Profiling**: Analyze site structure, detect CMS, APIs, sitemaps, RSS
     2. **Phase 1 - Discovery**: Multi-source discovery (API REST, RSS, sitemaps, heuristics)
     3. **Phase 2 - Scoring**: Probability scoring for each discovered URL
     4. **Phase 3 - Extraction**: Adaptive extraction using site profile
-    
-    Supports two modes:
-    - **Direct domains**: Provide 'domains' list directly (generic scraping)
-    - **Auto-fetch competitors**: Provide 'client_domain' to automatically fetch validated competitors
-    
-    Pour scraper le **site client lui-même** (et créer sa collection Qdrant dédiée),
+
+    **Prerequisites:**
+    - You must run `POST /api/v1/competitors/search?domain={client_domain}` first
+    - At least one competitor must be validated
+
+    **Pour scraper le site client lui-même** (et créer la collection `{domain}_client_articles`),
     utilisez la route: **POST /api/v1/discovery/client-scrape**.
     """,
 )
 async def enhanced_scrape(
-    domains: Optional[List[str]] = Query(None, description="List of domains to scrape (required if client_domain not provided)"),
-    client_domain: Optional[str] = Query(None, description="Client domain to fetch validated competitors from (required if domains not provided)"),
+    client_domain: str = Query(..., description="Client domain to fetch validated competitors from (REQUIRED)"),
     max_articles: int = Query(100, ge=1, le=1000, description="Maximum articles per domain"),
-    is_client_site: bool = Query(False, description="Whether this is a client site"),
-    site_profile_id: Optional[int] = Query(None, description="Site profile ID (required if is_client_site=True)"),
     force_reprofile: bool = Query(False, description="Force reprofiling even if profile exists"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
 ) -> ExecutionResponse:
     """
-    Start enhanced scraping workflow with 4-phase discovery.
+    Start enhanced scraping workflow with 4-phase discovery for competitors.
 
     Args:
-        domains: List of domains to scrape (required if client_domain not provided)
-        client_domain: Client domain to fetch validated competitors from (required if domains not provided)
+        client_domain: Client domain to fetch validated competitors from (REQUIRED)
         max_articles: Maximum articles per domain
-        is_client_site: Whether this is a client site
-        site_profile_id: Site profile ID (required if is_client_site=True)
         force_reprofile: Force reprofiling even if profile exists
         background_tasks: FastAPI background tasks
         db: Database session
@@ -255,106 +251,64 @@ async def enhanced_scrape(
         Execution response with execution_id
     """
     try:
-        # Safety: when using client_domain, this endpoint is for competitors only.
-        # To scrape the client site itself, there is a dedicated route:
-        # POST /api/v1/discovery/client-scrape
-        if client_domain and is_client_site:
+        # This endpoint is for competitors only
+        # To scrape the client site itself, use POST /api/v1/discovery/client-scrape
+        from sqlalchemy import select, desc
+        from python_scripts.database.models import WorkflowExecution
+
+        # Find latest completed competitor search for this domain
+        stmt = (
+            select(WorkflowExecution)
+            .where(
+                WorkflowExecution.workflow_type == "competitor_search",
+                WorkflowExecution.status == "completed",
+                WorkflowExecution.input_data["domain"].astext == client_domain,
+            )
+            .order_by(desc(WorkflowExecution.start_time))
+            .limit(1)
+        )
+
+        result = await db.execute(stmt)
+        execution = result.scalar_one_or_none()
+
+        if not execution or not execution.output_data:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "When using 'client_domain', this endpoint scrapes competitors only. "
-                    "For scraping the client site itself, use "
-                    "'POST /api/v1/discovery/client-scrape' with "
-                    "domain=<client_domain> and site_profile_id=<id>."
-                ),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No competitor search results found for domain: {client_domain}. Please run competitor search first.",
             )
 
-        domains_to_scrape = []
-        current_is_client_site = is_client_site
-        
-        # Mode 1: Explicit domains provided
-        if domains:
-            domains_to_scrape = domains
-            logger.info("Using explicit domains", domains=domains_to_scrape)
-        
-        # Mode 2: Fetch validated competitors from client_domain
-        elif client_domain:
-            from sqlalchemy import select, desc
-            from python_scripts.database.models import WorkflowExecution
-            
-            # Find latest completed competitor search for this domain
-            stmt = (
-                select(WorkflowExecution)
-                .where(
-                    WorkflowExecution.workflow_type == "competitor_search",
-                    WorkflowExecution.status == "completed",
-                    WorkflowExecution.input_data["domain"].astext == client_domain,
-                )
-                .order_by(desc(WorkflowExecution.start_time))
-                .limit(1)
-            )
-            
-            result = await db.execute(stmt)
-            execution = result.scalar_one_or_none()
-            
-            if not execution or not execution.output_data:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No competitor search results found for domain: {client_domain}. Please run competitor search first.",
-                )
-            
-            # Extract validated competitors (only those with validated=True or manual=True)
-            competitors_data = execution.output_data.get("competitors", [])
-            if not competitors_data:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No validated competitors found for domain: {client_domain}",
-                )
-            
-            # Extract domains from validated competitors
-            # Only include competitors that are validated=True or manual=True
-            domains_to_scrape = [
-                comp.get("domain")
-                for comp in competitors_data
-                if (
-                    comp.get("domain")
-                    and not comp.get("excluded", False)
-                    and (comp.get("validated", False) or comp.get("manual", False))
-                )
-            ]
-            
-            if not domains_to_scrape:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"No validated competitors found for domain: {client_domain}",
-                )
-            
-            # Force is_client_site=false when using client_domain (we're scraping competitors)
-            current_is_client_site = False
-            
-            logger.info(
-                "Fetched validated competitors",
-                client_domain=client_domain,
-                competitor_count=len(domains_to_scrape),
-                domains=domains_to_scrape,
-            )
-        
-        else:
-            # Neither domains nor client_domain provided
+        # Extract validated competitors (only those with validated=True or manual=True)
+        competitors_data = execution.output_data.get("competitors", [])
+        if not competitors_data:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Either 'domains' or 'client_domain' must be provided",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No validated competitors found for domain: {client_domain}",
             )
-        
-        # Validate client site requirements (only if is_client_site=true)
-        if current_is_client_site:
-            for domain in domains_to_scrape:
-                site_profile = await get_site_profile_by_domain(db, domain)
-                if not site_profile:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Site profile not found for domain: {domain}. Please run editorial analysis first.",
-                    )
+
+        # Extract domains from validated competitors
+        # Only include competitors that are validated=True or manual=True
+        domains_to_scrape = [
+            comp.get("domain")
+            for comp in competitors_data
+            if (
+                comp.get("domain")
+                and not comp.get("excluded", False)
+                and (comp.get("validated", False) or comp.get("manual", False))
+            )
+        ]
+
+        if not domains_to_scrape:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No validated competitors found for domain: {client_domain}",
+            )
+
+        logger.info(
+            "Fetched validated competitors for scraping",
+            client_domain=client_domain,
+            competitor_count=len(domains_to_scrape),
+            domains=domains_to_scrape,
+        )
 
         # Create workflow execution
         execution = await create_workflow_execution(
@@ -363,10 +317,10 @@ async def enhanced_scrape(
             input_data={
                 "domains": domains_to_scrape,
                 "max_articles": max_articles,
-                "is_client_site": current_is_client_site,
-                "site_profile_id": site_profile_id,
+                "is_client_site": False,  # Always false for competitors
+                "site_profile_id": None,  # Not needed for competitors
                 "force_reprofile": force_reprofile,
-                "client_domain": client_domain if client_domain else None,
+                "client_domain": client_domain,  # Always provided (required parameter)
             },
             status="pending",
         )
@@ -379,19 +333,18 @@ async def enhanced_scrape(
             domains=domains_to_scrape,
             max_articles=max_articles,
             execution_id=execution_id,
-            is_client_site=current_is_client_site,
-            site_profile_id=site_profile_id,
+            is_client_site=False,  # Always false for competitors
+            site_profile_id=None,  # Not needed for competitors
             force_reprofile=force_reprofile,
         )
 
         logger.info(
-            "Enhanced scraping workflow started",
+            "Enhanced scraping workflow started for competitors",
             execution_id=str(execution_id),
+            client_domain=client_domain,
+            competitor_count=len(domains_to_scrape),
             domains=domains_to_scrape,
             max_articles=max_articles,
-            is_client_site=current_is_client_site,
-            mode="auto-fetch" if client_domain else "explicit",
-            client_domain=client_domain,
         )
 
         return ExecutionResponse(
