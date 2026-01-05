@@ -55,6 +55,7 @@ class ClusteringConfig:
     embedding_collection: Optional[str] = None  # Will be generated from client_domain if provided
     client_domain: Optional[str] = None  # Client domain for generating collection name
     client_collection: str = "client_articles"
+    include_client_articles: bool = True  # Include client articles in clustering (unified clustering)
     normalize_embeddings: bool = True
     
     def __post_init__(self):

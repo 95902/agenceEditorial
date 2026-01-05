@@ -267,7 +267,7 @@ class CompetitorSearchAgent(BaseAgent):
     async def search_competitors(
         self,
         domain: str,
-        max_competitors: int = 100,
+        max_competitors: int = 10,
         db_session: AsyncSession = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -797,6 +797,9 @@ class CompetitorSearchAgent(BaseAgent):
             "total_evaluated": len(all_candidates),
             "domain": domain,
         }
+
+
+
 
 
 

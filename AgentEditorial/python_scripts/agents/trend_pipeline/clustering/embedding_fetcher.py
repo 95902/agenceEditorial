@@ -37,85 +37,47 @@ class EmbeddingFetcher:
             )
         return self._client
     
-    def fetch_embeddings(
+    def _fetch_from_collection(
         self,
+        collection_name: str,
         domains: Optional[List[str]] = None,
         max_age_days: Optional[int] = None,
         limit: Optional[int] = None,
-    ) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
+        article_type: Optional[str] = None,
+    ) -> Tuple[List[List[float]], List[Dict[str, Any]], List[str]]:
         """
-        Fetch embeddings from Qdrant collection.
-
+        Fetch embeddings from a specific Qdrant collection (internal helper method).
+        
         Args:
+            collection_name: Name of the Qdrant collection
             domains: Filter by domains (optional)
             max_age_days: Maximum article age in days (optional)
             limit: Maximum number of embeddings to fetch (optional)
-
+            article_type: Type of article ("client" or "competitor") to mark in metadata
+            
         Returns:
-            Tuple of (embeddings array, metadata list, document IDs list)
+            Tuple of (embeddings list, metadata list, document IDs list)
         """
-        collection_name = self.config.embedding_collection
         max_age = max_age_days or self.config.max_age_days
-
-        logger.info(
-            "Fetching embeddings from Qdrant",
-            collection=collection_name,
-            domains=domains,
-            max_age_days=max_age,
-        )
-
-        # Check if collection exists first
+        
+        # Check if collection exists
         try:
             collections = self.client.get_collections().collections
             collection_names = [c.name for c in collections]
-
+            
             if collection_name not in collection_names:
-                logger.error(
-                    "Collection does not exist in Qdrant",
+                logger.debug(
+                    "Collection does not exist, skipping",
                     collection=collection_name,
-                    available_collections=collection_names,
-                    error_type="collection_not_found",
                 )
-                logger.info(
-                    "This error typically occurs when articles have not been scraped yet. "
-                    "Run the scraping pipeline first to index competitor articles before running trend analysis.",
-                )
-                # Return empty arrays to allow pipeline to handle gracefully
-                return np.array([], dtype=np.float32), [], []
+                return [], [], []
         except Exception as e:
-            logger.error(
+            logger.warning(
                 "Failed to check collection existence",
                 collection=collection_name,
                 error=str(e),
-                error_type="connection_error",
             )
-            # Return empty arrays on connection error
-            return np.array([], dtype=np.float32), [], []
-
-        # Check collection info
-        try:
-            collection_info = self.get_collection_info()
-            points_count = collection_info.get("points_count", 0)
-            vectors_count = collection_info.get("vectors_count", 0)
-
-            logger.info(
-                "Collection info",
-                collection=collection_name,
-                points_count=points_count,
-                vectors_count=vectors_count,
-            )
-
-            # Warn if collection is empty
-            if points_count == 0:
-                logger.warning(
-                    "Collection exists but contains no articles",
-                    collection=collection_name,
-                    message="Run the scraping pipeline to index competitor articles before running trend analysis.",
-                )
-                # Return empty arrays
-                return np.array([], dtype=np.float32), [], []
-        except Exception as e:
-            logger.warning("Could not get collection info", error=str(e))
+            return [], [], []
         
         # Build filter
         must_conditions = []
@@ -129,7 +91,6 @@ class EmbeddingFetcher:
                 )
             )
         
-        # Note: Date filtering is done after retrieval since dates are stored as ISO strings
         # Calculate cutoff date for post-filtering
         cutoff_date = None
         if max_age > 0:
@@ -171,34 +132,32 @@ class EmbeddingFetcher:
                 
                 for point in points:
                     if point.vector is not None:
-                        payload = point.payload or {}
+                        payload = dict(point.payload or {})
                         
-                        # Filter by date if needed (dates are stored as ISO strings)
-                        if cutoff_date:
+                        # Mark article type
+                        if article_type:
+                            payload["article_type"] = article_type
+                        
+                        # Filter by date if needed (skip date filter for client articles to include all historical content)
+                        if cutoff_date and article_type != "client":
                             published_date_str = payload.get("published_date")
                             if published_date_str:
                                 try:
-                                    # Parse ISO string to datetime
                                     if published_date_str.endswith('Z'):
                                         published_date_str = published_date_str[:-1] + '+00:00'
                                     pub_date = datetime.fromisoformat(published_date_str)
                                     
-                                    # Ensure both dates are timezone-aware for comparison
                                     if pub_date.tzinfo is None:
                                         pub_date = pub_date.replace(tzinfo=timezone.utc)
                                     cutoff = cutoff_date
                                     if cutoff.tzinfo is None:
                                         cutoff = cutoff.replace(tzinfo=timezone.utc)
                                     
-                                    # Compare dates
                                     if pub_date < cutoff:
                                         filtered_by_date += 1
-                                        continue  # Skip articles older than cutoff
+                                        continue
                                 except (ValueError, AttributeError, TypeError) as e:
-                                    # If date parsing fails, include the article
                                     logger.debug("Date parsing failed", date_str=published_date_str, error=str(e))
-                                    pass
-                            # If no published_date, include the article
                         
                         embeddings.append(point.vector)
                         metadata_list.append(payload)
@@ -217,34 +176,101 @@ class EmbeddingFetcher:
                 offset = next_offset
                 
             except Exception as e:
-                error_msg = str(e)
-                # Categorize error type
-                if "Not found" in error_msg or "doesn't exist" in error_msg:
-                    logger.error(
-                        "Collection not found during scroll - this should not happen after initial check",
-                        collection=collection_name,
-                        error=error_msg,
-                        error_type="collection_not_found",
-                    )
-                elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
-                    logger.error(
-                        "Connection error while fetching embeddings",
-                        collection=collection_name,
-                        error=error_msg,
-                        error_type="connection_error",
-                    )
-                else:
-                    logger.error(
-                        "Unexpected error fetching embeddings",
-                        collection=collection_name,
-                        error=error_msg,
-                        error_type="unknown_error",
-                    )
+                logger.warning(
+                    "Error fetching from collection",
+                    collection=collection_name,
+                    error=str(e),
+                )
                 break
         
+        logger.debug(
+            "Fetched from collection",
+            collection=collection_name,
+            count=len(embeddings),
+            total_scanned=total_scanned,
+            filtered_by_date=filtered_by_date,
+            article_type=article_type,
+        )
+        
+        return embeddings, metadata_list, document_ids
+
+    def fetch_embeddings(
+        self,
+        domains: Optional[List[str]] = None,
+        max_age_days: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> Tuple[np.ndarray, List[Dict[str, Any]], List[str]]:
+        """
+        Fetch embeddings from Qdrant collections (competitor and optionally client).
+
+        Args:
+            domains: Filter by domains (optional)
+            max_age_days: Maximum article age in days (optional)
+            limit: Maximum number of embeddings to fetch (optional)
+
+        Returns:
+            Tuple of (embeddings array, metadata list, document IDs list)
+        """
+        max_age = max_age_days or self.config.max_age_days
+        competitor_collection = self.config.embedding_collection
+
+        logger.info(
+            "Fetching embeddings from Qdrant",
+            competitor_collection=competitor_collection,
+            include_client_articles=self.config.include_client_articles,
+            domains=domains,
+            max_age_days=max_age,
+        )
+
+        # 1. Fetch from competitor collection
+        competitor_embeddings, competitor_metadata, competitor_ids = self._fetch_from_collection(
+            collection_name=competitor_collection,
+            domains=domains,
+            max_age_days=max_age,
+            limit=limit,
+            article_type="competitor",
+        )
+
+        # 2. Fetch from client collection if enabled
+        client_embeddings, client_metadata, client_ids = [], [], []
+        if self.config.include_client_articles and self.config.client_domain:
+            from python_scripts.vectorstore.qdrant_client import get_client_collection_name
+            client_collection = get_client_collection_name(self.config.client_domain)
+            
+            logger.info(
+                "Including client articles in clustering",
+                client_collection=client_collection,
+                client_domain=self.config.client_domain,
+            )
+            
+            # For client articles, only fetch articles from the client domain
+            client_domains = [self.config.client_domain] if domains is None else [d for d in domains if d == self.config.client_domain]
+            if not client_domains and self.config.client_domain:
+                # If client domain not in domains filter, add it anyway for client collection
+                client_domains = [self.config.client_domain]
+            
+            client_embeddings, client_metadata, client_ids = self._fetch_from_collection(
+                collection_name=client_collection,
+                domains=client_domains,
+                max_age_days=max_age,
+                limit=None,  # No limit for client articles (usually small number)
+                article_type="client",
+            )
+            
+            logger.info(
+                "Fetched client articles",
+                count=len(client_embeddings),
+                collection=client_collection,
+            )
+
+        # 3. Merge results
+        all_embeddings = competitor_embeddings + client_embeddings
+        all_metadata = competitor_metadata + client_metadata
+        all_ids = competitor_ids + client_ids
+
         # Convert to numpy array
-        if embeddings:
-            embeddings_array = np.array(embeddings, dtype=np.float32)
+        if all_embeddings:
+            embeddings_array = np.array(all_embeddings, dtype=np.float32)
             
             # Normalize if configured
             if self.config.normalize_embeddings:
@@ -253,53 +279,43 @@ class EmbeddingFetcher:
                 embeddings_array = embeddings_array / norms
         else:
             embeddings_array = np.array([], dtype=np.float32)
-        
-        # If no results with domain filter, try without filter to see what domains exist
-        if total_scanned == 0 and domains:
-            logger.warning(
-                "No articles found matching domain filter",
-                requested_domains=domains,
-                collection=collection_name,
-            )
-            # Try a small sample without domain filter to see available domains
-            try:
-                sample_result = self.client.scroll(
-                    collection_name=collection_name,
-                    limit=10,
-                    with_vectors=False,
-                    with_payload=True,
-                )
-                sample_points, _ = sample_result
-                if sample_points:
-                    available_domains = set()
-                    for point in sample_points:
-                        if point.payload and "domain" in point.payload:
-                            available_domains.add(point.payload["domain"])
-                    logger.info(
-                        "Diagnosis: Collection contains articles from different domains",
-                        available_domains=list(available_domains),
-                        requested_domains=domains,
-                        message="The requested domains do not match the domains in the collection. "
-                                "This may indicate that articles were scraped with a different configuration.",
-                    )
-                else:
-                    logger.warning(
-                        "Collection appears to be empty",
-                        collection=collection_name,
-                        message="No articles found in collection even without domain filter.",
-                    )
-            except Exception as e:
-                logger.debug("Could not sample collection", error=str(e))
-        
+
+        # Log summary
         logger.info(
-            "Fetched embeddings",
-            count=len(embeddings_array),
-            total_scanned=total_scanned,
-            filtered_by_date=filtered_by_date,
+            "Fetched embeddings (unified)",
+            total_count=len(embeddings_array),
+            competitor_count=len(competitor_embeddings),
+            client_count=len(client_embeddings),
             domains=domains,
         )
-        
-        return embeddings_array, metadata_list, document_ids
+
+        # If no results, provide helpful diagnostics
+        if len(embeddings_array) == 0:
+            if competitor_collection:
+                try:
+                    sample_result = self.client.scroll(
+                        collection_name=competitor_collection,
+                        limit=10,
+                        with_vectors=False,
+                        with_payload=True,
+                    )
+                    sample_points, _ = sample_result
+                    if sample_points:
+                        available_domains = set()
+                        for point in sample_points:
+                            if point.payload and "domain" in point.payload:
+                                available_domains.add(point.payload["domain"])
+                        logger.warning(
+                            "No articles found matching filters",
+                            requested_domains=domains,
+                            available_domains=list(available_domains),
+                            collection=competitor_collection,
+                            message="The requested domains may not match the domains in the collection.",
+                        )
+                except Exception as e:
+                    logger.debug("Could not sample collection", error=str(e))
+
+        return embeddings_array, all_metadata, all_ids
     
     def get_collection_info(self) -> Dict[str, Any]:
         """

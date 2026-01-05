@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from uuid import UUID
 
@@ -858,7 +859,8 @@ async def _check_competitor_articles(
 
     # Consider sufficient only if BOTH PostgreSQL AND Qdrant have enough articles
     # This ensures consistency between the two systems
-    min_required = 10
+    import os
+    min_required = int(os.getenv("MIN_COMPETITOR_ARTICLES_FOR_AUDIT", "10"))
     is_sufficient = postgres_count >= min_required and qdrant_count >= min_required
 
     return (postgres_count, is_sufficient)
@@ -875,12 +877,14 @@ async def _check_client_articles(
         site_profile_id: Site profile ID
         
     Returns:
-        Tuple of (count, is_sufficient) where is_sufficient is True if count >= 5
+        Tuple of (count, is_sufficient) where is_sufficient is True if count >= MIN_CLIENT_ARTICLES_FOR_AUDIT (default: 5)
     """
     from python_scripts.database.crud_client_articles import count_client_articles
     
     count = await count_client_articles(db, site_profile_id=site_profile_id)
-    return (count, count >= 5)
+    import os
+    min_required = int(os.getenv("MIN_CLIENT_ARTICLES_FOR_AUDIT", "5"))
+    return (count, count >= min_required)
 
 
 async def _check_trend_pipeline(
@@ -963,6 +967,10 @@ async def build_complete_audit_from_database(
         db, site_profile_id=profile.id, limit=1000
     )
     
+    # S'assurer que themes est une liste (peut être None ou vide)
+    if not themes:
+        themes = []
+    
     # Pour chaque domaine d'activité
     for domain_label in themes:
         # Calculer topics_count (nombre de clusters/topics pertinents du trend pipeline)
@@ -1001,28 +1009,45 @@ async def build_complete_audit_from_database(
         "level": _map_language_level_to_audience_level(profile.language_level),
         "sectors": _extract_audience_sectors(target_audience),
     }
+    # S'assurer que sectors est toujours une liste
+    if "sectors" not in audience or not isinstance(audience["sectors"], list):
+        audience["sectors"] = []
     
     # 6. Competitors (top 5, triés par similarity puis alphabétique)
     competitors = []
-    if competitors_execution:
+    if competitors_execution and competitors_execution.output_data:
         competitors_data = competitors_execution.output_data.get("competitors", [])
-        # Filtrer et formater les concurrents validés
+        # Filtrer et formater les concurrents validés OU tous les concurrents si aucun n'est validé
         competitors_list = []
-        for comp in competitors_data:
-            if comp.get("validated", False) or comp.get("manual", False):
-                relevance = comp.get("relevance_score", 0.0)
-                domain_name = comp.get("domain", "")
-                if domain_name:  # Ignorer les domaines vides
-                    competitors_list.append({
-                        "name": domain_name,
-                        "similarity": int(relevance * 100),
-                    })
+        validated_competitors = [
+            comp for comp in competitors_data
+            if comp.get("validated", False) or comp.get("manual", False)
+        ]
+        
+        # Si aucun concurrent validé, utiliser tous les concurrents non exclus
+        competitors_to_use = validated_competitors if validated_competitors else [
+            comp for comp in competitors_data
+            if comp.get("domain") and not comp.get("excluded", False)
+        ]
+        
+        for comp in competitors_to_use:
+            relevance = comp.get("relevance_score", 0.0)
+            domain_name = comp.get("domain", "")
+            if domain_name:  # Ignorer les domaines vides
+                competitors_list.append({
+                    "name": domain_name,
+                    "similarity": int(relevance * 100),
+                })
         
         # Trier : d'abord par similarity (décroissant), puis par nom (alphabétique)
         competitors_list.sort(key=lambda x: (-x["similarity"], x["name"]))
         
         # Prendre les 5 meilleurs
         competitors = competitors_list[:5]
+    
+    # S'assurer que competitors est toujours une liste (pas None)
+    if competitors is None:
+        competitors = []
     
     # 7. took_ms (durée de la dernière analyse)
     took_ms = 0
@@ -1055,6 +1080,45 @@ async def build_complete_audit_from_database(
     )
 
 
+def _normalize_site_client(site_client: str) -> str:
+    """
+    Normalize site_client parameter to extract domain from URL if needed.
+    
+    Handles cases like:
+    - "https://innosys.fr" -> "innosys.fr"
+    - "http://innosys.fr" -> "innosys.fr"
+    - "www.innosys.fr" -> "innosys.fr"
+    - "innosys.fr" -> "innosys.fr"
+    - "innosys" -> "innosys"
+    
+    Args:
+        site_client: Client site identifier (can be URL, domain, or name)
+        
+    Returns:
+        Normalized domain string
+    """
+    from urllib.parse import urlparse
+    
+    # If it looks like a URL, extract the domain
+    if site_client.startswith(("http://", "https://")):
+        try:
+            parsed = urlparse(site_client)
+            domain = parsed.netloc or parsed.path.split("/")[0]
+        except Exception:
+            domain = site_client
+    else:
+        domain = site_client
+    
+    # Remove www. prefix if present
+    if domain.startswith("www."):
+        domain = domain[4:]
+    
+    # Remove trailing slash if present
+    domain = domain.rstrip("/")
+    
+    return domain.lower() if domain else site_client
+
+
 async def _get_topics_by_domain(
     db: AsyncSession,
     site_client: str,
@@ -1065,7 +1129,7 @@ async def _get_topics_by_domain(
     
     Args:
         db: Database session
-        site_client: Client site identifier (e.g., "innosys")
+        site_client: Client site identifier (e.g., "innosys", "innosys.fr", or "https://innosys.fr")
         domain_topic: Activity domain label (e.g., "cyber")
         
     Returns:
@@ -1074,13 +1138,16 @@ async def _get_topics_by_domain(
     Raises:
         HTTPException: If site profile not found or no trend pipeline execution
     """
-    # 1. Map site_client to domain (e.g., "innosys" -> "innosys.fr")
-    # Try the site_client as-is first (in case it's already a domain like "innosys.fr")
+    # 1. Normalize site_client to extract domain from URL if needed
+    normalized_client = _normalize_site_client(site_client)
+    
+    # 2. Map site_client to domain (e.g., "innosys" -> "innosys.fr")
+    # Try the normalized client as-is first (in case it's already a domain like "innosys.fr")
     # Then try common patterns
     domain_candidates = [
-        site_client,  # Try as-is first (handles "innosys.fr" case)
-        f"{site_client}.fr",
-        f"{site_client}.com",
+        normalized_client,  # Try as-is first (handles "innosys.fr" case)
+        f"{normalized_client}.fr",
+        f"{normalized_client}.com",
     ]
     
     profile = None
@@ -1102,9 +1169,34 @@ async def _get_topics_by_domain(
     all_domains = primary_domains + secondary_domains
     
     if domain_topic not in all_domains:
+        # Try to find similar domains for better error message
+        domain_topic_lower = domain_topic.lower()
+        similar_domains = []
+        
+        # Find domains that contain any of the keywords from the searched domain
+        search_keywords = set(domain_topic_lower.split())
+        for domain in all_domains:
+            domain_lower = domain.lower()
+            # Check if any keyword from search appears in the domain
+            if any(keyword in domain_lower for keyword in search_keywords if len(keyword) > 3):
+                similar_domains.append(domain)
+        
+        # Build error message
+        error_detail = f"Domain topic '{domain_topic}' not found in activity domains for {profile.domain}"
+        
+        if similar_domains:
+            error_detail += f". Similar domains found: {', '.join(similar_domains[:5])}"
+        else:
+            # Show first 10 available domains if no similar ones found
+            available_preview = all_domains[:10]
+            if len(all_domains) > 10:
+                error_detail += f". Available domains (showing first 10 of {len(all_domains)}): {', '.join(available_preview)}"
+            else:
+                error_detail += f". Available domains: {', '.join(available_preview)}"
+        
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Domain topic '{domain_topic}' not found in activity domains for {profile.domain}",
+            detail=error_detail,
         )
     
     # 3. Get latest trend pipeline execution
@@ -1405,7 +1497,7 @@ async def _get_topic_details(
     Args:
         db: Database session
         topic_id_slug: Topic ID slug (e.g., "edge-cloud-hybride-5")
-        site_client: Client site identifier
+        site_client: Client site identifier (e.g., "innosys", "innosys.fr", or "https://innosys.fr")
         domain_topic: Activity domain label
         
     Returns:
@@ -1423,8 +1515,22 @@ async def _get_topic_details(
     from python_scripts.database.crud_llm_results import get_article_recommendations_by_topic_cluster
     from python_scripts.database.models import ArticleRecommendation
     
-    # 1. Map site_client to domain and get profile
-    profile = await get_site_profile_by_domain(db, site_client)
+    # 1. Normalize site_client to extract domain from URL if needed
+    normalized_client = _normalize_site_client(site_client)
+    
+    # 2. Map site_client to domain and get profile
+    # Try normalized client first, then common patterns
+    domain_candidates = [
+        normalized_client,
+        f"{normalized_client}.fr",
+        f"{normalized_client}.com",
+    ]
+    
+    profile = None
+    for candidate_domain in domain_candidates:
+        profile = await get_site_profile_by_domain(db, candidate_domain)
+        if profile:
+            break
     if not profile:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2223,72 +2329,166 @@ async def run_missing_workflows_chain(
     from python_scripts.database.models import WorkflowExecution
     
     async with AsyncSessionLocal() as db:
+        failed_workflows = []  # Liste des workflows échoués (workflow_type, error_message)
+        orchestrator = EditorialAnalysisOrchestrator(db)
+        current_profile_id = profile_id
+        
         try:
-            orchestrator = EditorialAnalysisOrchestrator(db)
-            current_profile_id = profile_id
-            
-            # Étape 1: Editorial Analysis
+            # Étape 1: Editorial Analysis (CRITIQUE - doit réussir)
             if needs_analysis:
-                logger.info("Step 1: Starting editorial analysis", domain=domain)
-                analysis_execution = await create_workflow_execution(
-                    db,
-                    workflow_type="editorial_analysis",
-                    input_data={"domain": domain, "max_pages": 50},
-                    status="pending",
-                    parent_execution_id=orchestrator_execution_id,
-                )
-                
-                await orchestrator.run_editorial_analysis(
-                    domain=domain,
-                    max_pages=50,
-                    execution_id=analysis_execution.execution_id,
-                )
-                
-                await wait_for_execution_completion(
-                    db, analysis_execution.execution_id, timeout=600
-                )
-                
-                # Récupérer le profile créé
-                profile = await get_site_profile_by_domain(db, domain)
-                if profile:
-                    current_profile_id = profile.id
-            
-            # Étape 2: Competitor Search
-            if needs_competitors:
-                logger.info("Step 2: Starting competitor search", domain=domain)
-                competitor_execution = await create_workflow_execution(
-                    db,
-                    workflow_type="competitor_search",
-                    input_data={"domain": domain, "max_competitors": 50},
-                    status="pending",
-                    parent_execution_id=orchestrator_execution_id,
-                )
-                
-                await orchestrator.run_competitor_search(
-                    domain=domain,
-                    max_competitors=50,
-                    execution_id=competitor_execution.execution_id,
-                )
-                
-                await wait_for_execution_completion(
-                    db, competitor_execution.execution_id, timeout=300
-                )
-            
-            # Étape 3: Client Scraping
-            if needs_client_scraping and current_profile_id:
-                logger.info("Step 3: Starting client site scraping", domain=domain)
-                
-                # Créer un WorkflowExecution pour le client scraping
-                client_scraping_execution = await create_workflow_execution(
-                    db,
-                    workflow_type="client_scraping",
-                    input_data={"domain": domain, "max_articles": 100},
-                    status="running",
-                    parent_execution_id=orchestrator_execution_id,
-                )
-                
-                scraping_agent = EnhancedScrapingAgent(min_word_count=150)
                 try:
+                    logger.info("Step 1: Starting editorial analysis", domain=domain)
+                    analysis_execution = await create_workflow_execution(
+                        db,
+                        workflow_type="editorial_analysis",
+                        input_data={"domain": domain, "max_pages": 50},
+                        status="pending",
+                        parent_execution_id=orchestrator_execution_id,
+                    )
+                    
+                    await orchestrator.run_editorial_analysis(
+                        domain=domain,
+                        max_pages=50,
+                        execution_id=analysis_execution.execution_id,
+                    )
+                    
+                    await wait_for_execution_completion(
+                        db, analysis_execution.execution_id, timeout=600
+                    )
+                    
+                    # Vérifier le succès
+                    analysis_exec = await get_workflow_execution(db, analysis_execution.execution_id)
+                    if analysis_exec and analysis_exec.status == "completed":
+                        await update_workflow_execution(
+                            db,
+                            analysis_exec,
+                            was_success=True,
+                        )
+                        # Récupérer le profile créé
+                        profile = await get_site_profile_by_domain(db, domain)
+                        if profile:
+                            current_profile_id = profile.id
+                    else:
+                        raise Exception("Editorial analysis did not complete successfully")
+                        
+                except Exception as e:
+                    logger.error(
+                        "Editorial analysis failed (critical)",
+                        domain=domain,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    # Marquer l'exécution comme échouée
+                    if 'analysis_execution' in locals():
+                        analysis_exec = await get_workflow_execution(db, analysis_execution.execution_id)
+                        if analysis_exec:
+                            await update_workflow_execution(
+                                db,
+                                analysis_exec,
+                                status="failed",
+                                error_message=str(e),
+                                was_success=False,
+                            )
+                    failed_workflows.append(("editorial_analysis", str(e)))
+                    # Ne pas continuer si l'analyse échoue (critique)
+                    raise
+            
+            # Étape 2: Competitor Search (NON-CRITIQUE)
+            if needs_competitors:
+                try:
+                    logger.info("Step 2: Starting competitor search", domain=domain)
+                    competitor_execution = await create_workflow_execution(
+                        db,
+                        workflow_type="competitor_search",
+                        input_data={"domain": domain, "max_competitors": 10},
+                        status="pending",
+                        parent_execution_id=orchestrator_execution_id,
+                    )
+                    
+                    await orchestrator.run_competitor_search(
+                        domain=domain,
+                        max_competitors=10,
+                        execution_id=competitor_execution.execution_id,
+                    )
+                    
+                    await wait_for_execution_completion(
+                        db, competitor_execution.execution_id, timeout=300
+                    )
+                    
+                    # Vérifier le succès
+                    competitor_exec = await get_workflow_execution(db, competitor_execution.execution_id)
+                    if competitor_exec and competitor_exec.status == "completed":
+                        await update_workflow_execution(
+                            db,
+                            competitor_exec,
+                            was_success=True,
+                        )
+                        
+                        # Auto-validate all competitors found (appel automatique de la validation)
+                        try:
+                            from python_scripts.api.routers.competitors import auto_validate_competitors
+                            logger.info(
+                                "Auto-validating competitors after search",
+                                domain=domain,
+                                execution_id=str(competitor_exec.execution_id),
+                            )
+                            await auto_validate_competitors(
+                                db_session=db,
+                                domain=domain,
+                                execution=competitor_exec,
+                            )
+                            logger.info(
+                                "Auto-validation completed",
+                                domain=domain,
+                                execution_id=str(competitor_exec.execution_id),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Auto-validation failed, continuing anyway",
+                                domain=domain,
+                                error=str(e),
+                                exc_info=True,
+                            )
+                            # Ne pas faire échouer le workflow si la validation échoue
+                    else:
+                        raise Exception("Competitor search did not complete successfully")
+                        
+                except Exception as e:
+                    logger.error(
+                        "Competitor search failed, continuing...",
+                        domain=domain,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    # Marquer l'exécution comme échouée
+                    if 'competitor_execution' in locals():
+                        competitor_exec = await get_workflow_execution(db, competitor_execution.execution_id)
+                        if competitor_exec:
+                            await update_workflow_execution(
+                                db,
+                                competitor_exec,
+                                status="failed",
+                                error_message=str(e),
+                                was_success=False,
+                            )
+                    failed_workflows.append(("competitor_search", str(e)))
+                    # Ne pas raise, continuer avec les autres workflows
+            
+            # Étape 3: Client Scraping (SEMI-CRITIQUE)
+            if needs_client_scraping and current_profile_id:
+                try:
+                    logger.info("Step 3: Starting client site scraping", domain=domain)
+                    
+                    # Créer un WorkflowExecution pour le client scraping
+                    client_scraping_execution = await create_workflow_execution(
+                        db,
+                        workflow_type="client_scraping",
+                        input_data={"domain": domain, "max_articles": 100},
+                        status="running",
+                        parent_execution_id=orchestrator_execution_id,
+                    )
+                    
+                    scraping_agent = EnhancedScrapingAgent(min_word_count=150)
                     await scraping_agent.discover_and_scrape_articles(
                         db,
                         domain,
@@ -2301,114 +2501,150 @@ async def run_missing_workflows_chain(
                         db,
                         client_scraping_execution,
                         status="completed",
+                        was_success=True,
                     )
                 except Exception as e:
-                    await update_workflow_execution(
-                        db,
-                        client_scraping_execution,
-                        status="failed",
-                        error_message=str(e),
+                    logger.error(
+                        "Client scraping failed",
+                        domain=domain,
+                        error=str(e),
+                        exc_info=True,
                     )
-                    raise
-            
-            # Étape 4: Competitor Scraping
-            if needs_scraping:
-                logger.info("Step 4: Starting competitor scraping", domain=domain)
-                # Récupérer les concurrents validés
-                stmt = (
-                    select(WorkflowExecution)
-                    .where(
-                        WorkflowExecution.workflow_type == "competitor_search",
-                        WorkflowExecution.status == "completed",
-                        WorkflowExecution.input_data["domain"].astext == domain,
-                    )
-                    .order_by(desc(WorkflowExecution.start_time))
-                    .limit(1)
-                )
-                result = await db.execute(stmt)
-                competitor_exec = result.scalar_one_or_none()
-                
-                if competitor_exec:
-                    competitors_data = competitor_exec.output_data.get("competitors", [])
-                    # Use same filter as trend pipeline for consistency
-                    competitor_domains = []
-                    for c in competitors_data:
-                        validation_status = c.get("validation_status", "validated")
-                        validated = c.get("validated", False)
-                        excluded = c.get("excluded", False)
-                        competitor_domain = c.get("domain")
-
-                        # Include only validated or manual competitors (not excluded)
-                        if competitor_domain and not excluded and (validation_status in ["validated", "manual"] or validated):
-                            competitor_domains.append(competitor_domain)
-
-                    if competitor_domains:
-                        logger.info(
-                            "Starting scraping for validated competitors",
-                            domain=domain,
-                            competitor_count=len(competitor_domains),
-                            domains=competitor_domains[:10],  # Log first 10 domains
-                        )
-                        scraping_execution = await create_workflow_execution(
+                    # Marquer l'exécution comme échouée
+                    if 'client_scraping_execution' in locals():
+                        await update_workflow_execution(
                             db,
-                            workflow_type="enhanced_scraping",
-                            input_data={
-                                "client_domain": domain,
-                                "domains": competitor_domains,
-                                "max_articles": 100,
-                            },
-                            status="pending",
-                            parent_execution_id=orchestrator_execution_id,
+                            client_scraping_execution,
+                            status="failed",
+                            error_message=str(e),
+                            was_success=False,
                         )
+                    failed_workflows.append(("client_scraping", str(e)))
+                    # Continuer quand même (peut avoir des données partielles)
+            
+            # Étape 4: Competitor Scraping (NON-CRITIQUE)
+            if needs_scraping:
+                try:
+                    logger.info("Step 4: Starting competitor scraping", domain=domain)
+                    # Récupérer les concurrents validés
+                    stmt = (
+                        select(WorkflowExecution)
+                        .where(
+                            WorkflowExecution.workflow_type == "competitor_search",
+                            WorkflowExecution.status == "completed",
+                            WorkflowExecution.input_data["domain"].astext == domain,
+                        )
+                        .order_by(desc(WorkflowExecution.start_time))
+                        .limit(1)
+                    )
+                    result = await db.execute(stmt)
+                    competitor_exec = result.scalar_one_or_none()
+                    
+                    if competitor_exec and competitor_exec.output_data:
+                        competitors_data = competitor_exec.output_data.get("competitors", [])
+                        # Use same filter as trend pipeline for consistency
+                        competitor_domains = []
+                        for c in competitors_data:
+                            validation_status = c.get("validation_status", "validated")
+                            validated = c.get("validated", False)
+                            excluded = c.get("excluded", False)
+                            competitor_domain = c.get("domain")
 
-                        scraping_agent = EnhancedScrapingAgent(min_word_count=150)
-                        for comp_domain in competitor_domains:
-                            await scraping_agent.discover_and_scrape_articles(
+                            # Include only validated or manual competitors (not excluded)
+                            if competitor_domain and not excluded and (validation_status in ["validated", "manual"] or validated):
+                                competitor_domains.append(competitor_domain)
+
+                        if competitor_domains:
+                            logger.info(
+                                "Starting scraping for validated competitors",
+                                domain=domain,
+                                competitor_count=len(competitor_domains),
+                                domains=competitor_domains[:10],  # Log first 10 domains
+                            )
+                            scraping_execution = await create_workflow_execution(
                                 db,
-                                comp_domain,
-                                max_articles=100,
-                                is_client_site=False,
-                                site_profile_id=None,
-                                force_reprofile=False,
-                                client_domain=domain,
+                                workflow_type="enhanced_scraping",
+                                input_data={
+                                    "client_domain": domain,
+                                    "domains": competitor_domains,
+                                    "max_articles": 100,
+                                },
+                                status="running",
+                                parent_execution_id=orchestrator_execution_id,
                             )
 
+                            scraping_agent = EnhancedScrapingAgent(min_word_count=150)
+                            for comp_domain in competitor_domains:
+                                await scraping_agent.discover_and_scrape_articles(
+                                    db,
+                                    comp_domain,
+                                    max_articles=100,
+                                    is_client_site=False,
+                                    site_profile_id=None,
+                                    force_reprofile=False,
+                                    client_domain=domain,
+                                )
+
+                            await update_workflow_execution(
+                                db,
+                                scraping_execution,
+                                status="completed",
+                                was_success=True,
+                            )
+                        else:
+                            # No validated competitors found
+                            total_competitors = len(competitors_data)
+                            logger.warning(
+                                "Competitor scraping skipped: no validated competitors",
+                                domain=domain,
+                                total_competitors_found=total_competitors,
+                                validated_competitors=0,
+                                recommendation=(
+                                    "Validate competitors via /api/v1/competitors/validate endpoint "
+                                    "or enable auto-validation in competitor search."
+                                )
+                            )
+                    else:
+                        logger.warning(
+                            "Competitor scraping skipped: no competitor search results",
+                            domain=domain,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "Competitor scraping failed, continuing...",
+                        domain=domain,
+                        error=str(e),
+                        exc_info=True,
+                    )
+                    # Marquer l'exécution comme échouée si elle existe
+                    if 'scraping_execution' in locals():
                         await update_workflow_execution(
                             db,
                             scraping_execution,
-                            status="completed",
+                            status="failed",
+                            error_message=str(e),
+                            was_success=False,
                         )
-                    else:
-                        # No validated competitors found
-                        total_competitors = len(competitors_data)
-                        logger.warning(
-                            "Competitor scraping skipped: no validated competitors",
-                            domain=domain,
-                            total_competitors_found=total_competitors,
-                            validated_competitors=0,
-                            recommendation=(
-                                "Validate competitors via /api/v1/competitors/validate endpoint "
-                                "or enable auto-validation in competitor search."
-                            )
-                        )
+                    failed_workflows.append(("enhanced_scraping", str(e)))
+                    # Ne pas raise, continuer avec les autres workflows
             
-            # Étape 5: Trend Pipeline
+            # Étape 5: Trend Pipeline (NON-CRITIQUE)
             if needs_trend_pipeline:
-                logger.info("Step 5: Starting trend pipeline", domain=domain)
-                
-                # Créer un WorkflowExecution pour le trend pipeline
-                trend_execution = await create_workflow_execution(
-                    db,
-                    workflow_type="trend_pipeline",
-                    input_data={
-                        "client_domain": domain,
-                        "time_window_days": 90,
-                    },
-                    status="running",
-                    parent_execution_id=orchestrator_execution_id,
-                )
-                
                 try:
+                    logger.info("Step 5: Starting trend pipeline", domain=domain)
+                    
+                    # Créer un WorkflowExecution pour le trend pipeline
+                    trend_execution = await create_workflow_execution(
+                        db,
+                        workflow_type="trend_pipeline",
+                        input_data={
+                            "client_domain": domain,
+                            "time_window_days": 90,
+                        },
+                        status="running",
+                        parent_execution_id=orchestrator_execution_id,
+                    )
+                    
                     from uuid import uuid4
                     from python_scripts.api.routers.trend_pipeline import (
                         TrendPipelineRequest,
@@ -2435,6 +2671,7 @@ async def run_missing_workflows_chain(
                     
                     max_wait = 1200  # 20 minutes
                     start_wait = datetime.now()
+                    trend_exec = None
                     while (datetime.now() - start_wait).total_seconds() < max_wait:
                         stmt = (
                             select(TrendPipelineExecution)
@@ -2453,40 +2690,90 @@ async def run_missing_workflows_chain(
                         
                         await asyncio.sleep(10)
                     
-                    await update_workflow_execution(
-                        db,
-                        trend_execution,
-                        status="completed",
-                    )
+                    # Vérifier si timeout (P1-9)
+                    if not trend_exec:
+                        elapsed = (datetime.now() - start_wait).total_seconds()
+                        error_msg = f"Trend pipeline did not complete within {max_wait}s (elapsed: {elapsed:.0f}s)"
+                        logger.error(
+                            "Trend pipeline timeout",
+                            execution_id=execution_id,
+                            elapsed=elapsed,
+                            domain=domain,
+                        )
+                        await update_workflow_execution(
+                            db,
+                            trend_execution,
+                            status="failed",
+                            error_message=error_msg,
+                            was_success=False,
+                        )
+                        failed_workflows.append(("trend_pipeline", error_msg))
+                    else:
+                        await update_workflow_execution(
+                            db,
+                            trend_execution,
+                            status="completed",
+                            was_success=True,
+                        )
                 except Exception as e:
-                    await update_workflow_execution(
-                        db,
-                        trend_execution,
-                        status="failed",
-                        error_message=str(e),
+                    logger.error(
+                        "Trend pipeline failed",
+                        domain=domain,
+                        error=str(e),
+                        exc_info=True,
                     )
-                    raise
+                    # Marquer l'exécution comme échouée
+                    if 'trend_execution' in locals():
+                        await update_workflow_execution(
+                            db,
+                            trend_execution,
+                            status="failed",
+                            error_message=str(e),
+                            was_success=False,
+                        )
+                    failed_workflows.append(("trend_pipeline", str(e)))
+                    # Ne pas raise, continuer
             
-            # Mettre à jour l'orchestrator comme complété
+            # Déterminer le statut final de l'orchestrator (P0-3)
             orchestrator_exec = await get_workflow_execution(
                 db, orchestrator_execution_id
             )
             if orchestrator_exec:
+                if failed_workflows:
+                    # Succès partiel
+                    status = "completed"  # On garde "completed" mais avec was_success=False
+                    error_message = f"Some workflows failed: {', '.join(w[0] for w in failed_workflows)}"
+                    was_success = False
+                    output_data = {"failed_workflows": failed_workflows}
+                else:
+                    # Succès complet
+                    status = "completed"
+                    error_message = None
+                    was_success = True
+                    output_data = None
+
                 await update_workflow_execution(
                     db,
                     orchestrator_exec,
-                    status="completed",
+                    status=status,
+                    error_message=error_message,
+                    was_success=was_success,
+                    output_data=output_data,
                 )
-            
+
             logger.info(
                 "Missing workflows completed",
                 domain=domain,
                 orchestrator_execution_id=str(orchestrator_execution_id),
+                status=status,
+                failed_count=len(failed_workflows),
+                failed_workflows=[w[0] for w in failed_workflows] if failed_workflows else [],
             )
             
         except Exception as e:
+            # Erreur critique (editorial_analysis ou autre erreur non gérée)
             logger.error(
-                "Missing workflows chain failed",
+                "Critical error in workflows chain",
                 domain=domain,
                 error=str(e),
                 exc_info=True,
@@ -2500,6 +2787,7 @@ async def run_missing_workflows_chain(
                     orchestrator_exec,
                     status="failed",
                     error_message=str(e),
+                    was_success=False,
                 )
 
 
@@ -2529,6 +2817,29 @@ async def _get_audit_status(
             status_code=404,
             detail=f"Orchestrator execution not found: {orchestrator_execution_id}"
         )
+    
+    # P0-2: Vérifier le timeout global (1 heure maximum)
+    now = datetime.now(timezone.utc)
+    MAX_ORCHESTRATOR_DURATION_SECONDS = 3600  # 1 heure
+    if orchestrator.start_time and orchestrator.status == "running":
+        elapsed_seconds = (now - orchestrator.start_time).total_seconds()
+        if elapsed_seconds > MAX_ORCHESTRATOR_DURATION_SECONDS:
+            # Timeout dépassé : marquer comme failed
+            from python_scripts.database.crud_executions import update_workflow_execution
+            logger.warning(
+                "Orchestrator timeout exceeded, marking as failed",
+                execution_id=str(orchestrator_execution_id),
+                elapsed_seconds=elapsed_seconds,
+                max_duration=MAX_ORCHESTRATOR_DURATION_SECONDS,
+            )
+            await update_workflow_execution(
+                db,
+                orchestrator,
+                status="failed",
+                error_message=f"Orchestrator timeout exceeded after {elapsed_seconds:.0f} seconds (max: {MAX_ORCHESTRATOR_DURATION_SECONDS}s)",
+            )
+            # Recharger l'orchestrator pour avoir le statut mis à jour
+            orchestrator = await get_workflow_execution(db, orchestrator_execution_id)
     
     # Récupérer tous les workflows enfants
     stmt = (
@@ -2664,7 +2975,8 @@ async def _get_audit_status(
     
     competitor_articles_count = 0
     has_competitor_articles = False
-    if competitors_execution:
+    if competitors_execution and competitors_execution.output_data:
+        # P0-5: vérification null pour output_data
         competitors_data = competitors_execution.output_data.get("competitors", [])
         competitor_domains = [
             c.get("domain")
@@ -2707,6 +3019,12 @@ async def _get_audit_status(
     )
 
 
+# Regex pour valider le format d'un domaine
+DOMAIN_REGEX = re.compile(
+    r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$'
+)
+
+
 @router.get(
     "/{domain}/audit",
     response_model=Union[SiteAuditResponse, PendingAuditResponse],
@@ -2731,7 +3049,11 @@ async def _get_audit_status(
     """,
 )
 async def get_site_audit(
-    domain: str,
+    domain: str = Path(
+        ...,
+        description="Valid domain name (e.g., example.com, innosys.fr)",
+        examples=["innosys.fr", "example.com"],
+    ),
     db: AsyncSession = Depends(get_db),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> Union[SiteAuditResponse, PendingAuditResponse]:
@@ -2741,39 +3063,128 @@ async def get_site_audit(
     Vérifie chaque source de données et lance seulement ce qui manque.
     
     Args:
-        domain: Domain name
+        domain: Domain name (validated format)
         db: Database session
         background_tasks: FastAPI background tasks
         
     Returns:
         Complete audit data or pending response
+        
+    Raises:
+        HTTPException: 422 if domain format is invalid
     """
+    # Validation du domaine (P2-8)
+    if not DOMAIN_REGEX.match(domain):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid domain format: {domain}. Expected format: example.com",
+        )
+    
     from python_scripts.database.crud_executions import create_workflow_execution
     
     # ============================================================
-    # ÉTAPE 1: Vérifier site_profile
+    # ÉTAPE 1: Vérifier site_profile (P0-4: gestion d'erreur)
     # ============================================================
-    profile = await _check_site_profile(db, domain)
+    try:
+        profile = await _check_site_profile(db, domain)
+    except Exception as e:
+        logger.warning(
+            "Error checking site profile, assuming missing",
+            domain=domain,
+            error=str(e),
+        )
+        profile = None
     needs_analysis = not profile
     
     # ============================================================
-    # ÉTAPE 2: Vérifier competitors
+    # ÉTAPE 2-5: Vérifications en parallèle (P1-1: parallélisation)
     # ============================================================
+    # Paralléliser les vérifications indépendantes pour améliorer les performances
     competitors_execution = None
-    if profile:  # Seulement si profile existe
-        competitors_execution = await _check_competitors(db, domain)
+    trend_execution = None
+    competitor_articles_count = 0
+    client_articles_count = 0
+    
+    if profile:
+        # Lancer les vérifications en parallèle
+        try:
+            results = await asyncio.gather(
+                _check_competitors(db, domain),
+                _check_trend_pipeline(db, domain),
+                _check_client_articles(db, profile.id),
+                return_exceptions=True,
+            )
+            
+            competitors_execution, trend_execution, client_articles_result = results
+            
+            # Gérer les exceptions (P0-4: gestion d'erreur)
+            if isinstance(competitors_execution, Exception):
+                logger.warning(
+                    "Error checking competitors, assuming missing",
+                    domain=domain,
+                    error=str(competitors_execution),
+                )
+                competitors_execution = None
+            if isinstance(trend_execution, Exception):
+                logger.warning(
+                    "Error checking trend pipeline, assuming missing",
+                    domain=domain,
+                    error=str(trend_execution),
+                )
+                trend_execution = None
+            if isinstance(client_articles_result, Exception):
+                logger.warning(
+                    "Error checking client articles, assuming missing",
+                    domain=domain,
+                    error=str(client_articles_result),
+                )
+                client_articles_count = 0
+            else:
+                # client_articles_result est un tuple (count, is_sufficient)
+                client_articles_count, _ = client_articles_result
+        except Exception as e:
+            logger.error(
+                "Error during parallel checks",
+                domain=domain,
+                error=str(e),
+            )
+            # En cas d'erreur globale, considérer que tout manque
+            competitors_execution = None
+            trend_execution = None
+            client_articles_count = 0
+    else:
+        # Pas de profile : vérifier seulement les concurrents (sans dépendance)
+        try:
+            competitors_execution = await _check_competitors(db, domain)
+            if isinstance(competitors_execution, Exception):
+                logger.warning(
+                    "Error checking competitors, assuming missing",
+                    domain=domain,
+                    error=str(competitors_execution),
+                )
+                competitors_execution = None
+        except Exception as e:
+            logger.warning(
+                "Error checking competitors, assuming missing",
+                domain=domain,
+                error=str(e),
+            )
+            competitors_execution = None
     
     needs_competitors = not competitors_execution
+    needs_trend_pipeline = not trend_execution
     
     # ============================================================
     # ÉTAPE 3: Vérifier articles scrapés (competitors)
     # ============================================================
-    competitor_articles_count = 0
     needs_scraping = False
     
     if competitors_execution:
-        # Récupérer les domaines des concurrents validés
-        competitors_data = competitors_execution.output_data.get("competitors", [])
+        # Récupérer les domaines des concurrents validés (P0-5: vérification null)
+        if competitors_execution.output_data is None:
+            competitors_data = []
+        else:
+            competitors_data = competitors_execution.output_data.get("competitors", [])
         competitor_domains = [
             c.get("domain")
             for c in competitors_data
@@ -2784,11 +3195,20 @@ async def get_site_audit(
         
         if competitor_domains:
             # Compter les articles pour ces domaines (PostgreSQL + Qdrant)
-            count, is_sufficient = await _check_competitor_articles(
-                db, competitor_domains, client_domain=domain
-            )
-            competitor_articles_count = count
-            needs_scraping = not is_sufficient
+            try:
+                count, is_sufficient = await _check_competitor_articles(
+                    db, competitor_domains, client_domain=domain
+                )
+                competitor_articles_count = count
+                needs_scraping = not is_sufficient
+            except Exception as e:
+                logger.warning(
+                    "Error checking competitor articles, assuming insufficient",
+                    domain=domain,
+                    error=str(e),
+                )
+                competitor_articles_count = 0
+                needs_scraping = True
         else:
             needs_scraping = True
     else:
@@ -2797,28 +3217,75 @@ async def get_site_audit(
     # ============================================================
     # ÉTAPE 4: Vérifier articles client (client_articles)
     # ============================================================
-    client_articles_count = 0
     needs_client_scraping = False
     
     if profile:
-        count, is_sufficient = await _check_client_articles(db, profile.id)
-        client_articles_count = count
-        needs_client_scraping = not is_sufficient
+        # client_articles_count a déjà été récupéré dans le gather ci-dessus
+        # Vérifier si suffisant (seuil: 5 articles)
+        needs_client_scraping = client_articles_count < 5
     else:
         needs_client_scraping = True
     
     # ============================================================
-    # ÉTAPE 5: Vérifier trend pipeline
-    # ============================================================
-    trend_execution = None
-    if profile:  # Seulement si profile existe
-        trend_execution = await _check_trend_pipeline(db, domain)
-    
-    needs_trend_pipeline = not trend_execution
-    
-    # ============================================================
     # DÉCISION: Lancer les workflows manquants ou retourner les données
     # ============================================================
+    
+    # AVANT de décider de lancer des workflows, vérifier s'il existe un orchestrator "completed" récent
+    # Si oui et que les données essentielles sont disponibles, retourner les données directement
+    from python_scripts.database.models import WorkflowExecution
+    
+    completed_orchestrator_stmt = (
+        select(WorkflowExecution)
+        .where(
+            WorkflowExecution.workflow_type == "audit_orchestrator",
+            WorkflowExecution.status == "completed",
+            WorkflowExecution.input_data["domain"].astext == domain,
+            WorkflowExecution.is_valid == True,
+            WorkflowExecution.was_success == True,  # Seulement les succès complets
+        )
+        .order_by(desc(WorkflowExecution.end_time))
+        .limit(1)
+    )
+    completed_result = await db.execute(completed_orchestrator_stmt)
+    completed_orchestrator = completed_result.scalar_one_or_none()
+    
+    # Si un orchestrator complet existe et que les données essentielles sont disponibles
+    # (profile, competitors, trend_pipeline), retourner les données même s'il manque quelques articles
+    # Note: needs_scraping peut être True si aucun concurrent n'est validé, mais on peut quand même retourner les données
+    if completed_orchestrator and profile and not needs_analysis and not needs_competitors and not needs_trend_pipeline:
+        logger.info(
+            "Completed orchestrator found with essential data available, returning audit",
+            execution_id=str(completed_orchestrator.execution_id),
+            domain=domain,
+            missing_scraping=needs_scraping,
+            missing_client_scraping=needs_client_scraping,
+        )
+        # Les données essentielles sont disponibles : construire et retourner la réponse
+        return await build_complete_audit_from_database(
+            db,
+            domain,
+            profile,
+            competitors_execution,
+            trend_execution,
+        )
+    
+    # Si les données essentielles sont disponibles SANS orchestrator complet, retourner aussi les données
+    # (cas où l'orchestrator n'existe pas mais toutes les données sont là)
+    if profile and not needs_analysis and not needs_competitors and not needs_trend_pipeline:
+        logger.info(
+            "Essential data available without completed orchestrator, returning audit",
+            domain=domain,
+            missing_scraping=needs_scraping,
+            missing_client_scraping=needs_client_scraping,
+        )
+        # Les données essentielles sont disponibles : construire et retourner la réponse
+        return await build_complete_audit_from_database(
+            db,
+            domain,
+            profile,
+            competitors_execution,
+            trend_execution,
+        )
     
     if (
         needs_analysis
@@ -2828,7 +3295,98 @@ async def get_site_audit(
         or needs_trend_pipeline
     ):
         # Il manque des données : lancer les workflows nécessaires
-        # Créer un orchestrator execution pour suivre la progression
+        # Vérifier d'abord si un orchestrator existe déjà pour ce domaine (P0-1: Race condition fix)
+        existing_orchestrator_stmt = (
+            select(WorkflowExecution)
+            .where(
+                WorkflowExecution.workflow_type == "audit_orchestrator",
+                WorkflowExecution.status.in_(["pending", "running"]),
+                WorkflowExecution.input_data["domain"].astext == domain,
+                WorkflowExecution.is_valid == True,
+            )
+            .order_by(desc(WorkflowExecution.created_at))
+            .limit(1)
+        )
+        existing_result = await db.execute(existing_orchestrator_stmt)
+        existing_orchestrator = existing_result.scalar_one_or_none()
+        
+        if existing_orchestrator:
+            # Un orchestrator existe déjà : retourner celui-ci
+            logger.info(
+                "Existing orchestrator found, reusing",
+                execution_id=str(existing_orchestrator.execution_id),
+                domain=domain,
+            )
+            
+            # Construire la liste des étapes depuis input_data
+            input_data = existing_orchestrator.input_data or {}
+            workflow_steps = []
+            step_num = 1
+            
+            if input_data.get("needs_analysis", False):
+                workflow_steps.append(
+                    WorkflowStep(
+                        step=step_num,
+                        name="Editorial Analysis",
+                        status="pending",
+                    )
+                )
+                step_num += 1
+            
+            if input_data.get("needs_competitors", False):
+                workflow_steps.append(
+                    WorkflowStep(
+                        step=step_num,
+                        name="Competitor Search",
+                        status="pending",
+                    )
+                )
+                step_num += 1
+            
+            if input_data.get("needs_client_scraping", False):
+                workflow_steps.append(
+                    WorkflowStep(
+                        step=step_num,
+                        name="Client Site Scraping",
+                        status="pending",
+                    )
+                )
+                step_num += 1
+            
+            if input_data.get("needs_scraping", False):
+                workflow_steps.append(
+                    WorkflowStep(
+                        step=step_num,
+                        name="Competitor Scraping",
+                        status="pending",
+                    )
+                )
+                step_num += 1
+            
+            if input_data.get("needs_trend_pipeline", False):
+                workflow_steps.append(
+                    WorkflowStep(
+                        step=step_num,
+                        name="Trend Pipeline",
+                        status="pending",
+                    )
+                )
+            
+            return PendingAuditResponse(
+                status="pending",
+                execution_id=str(existing_orchestrator.execution_id),
+                message="Audit already in progress. Use the execution_id to check status.",
+                workflow_steps=workflow_steps,
+                data_status=DataStatus(
+                    has_profile=not needs_analysis,
+                    has_competitors=not needs_competitors,
+                    has_client_articles=not needs_client_scraping,
+                    has_competitor_articles=not needs_scraping,
+                    has_trend_pipeline=not needs_trend_pipeline,
+                ),
+            )
+        
+        # Aucun orchestrator existant : créer un nouveau
         orchestrator_execution = await create_workflow_execution(
             db,
             workflow_type="audit_orchestrator",
@@ -2949,12 +3507,15 @@ async def get_site_audit(
     
     Utilisez cette route pour poller le statut de l'audit après avoir reçu
     un `PendingAuditResponse` avec un `execution_id`.
+    
+    Note: Si l'audit est déjà complété et que toutes les données sont disponibles,
+    utilisez directement GET /{domain}/audit pour obtenir les données complètes.
     """,
     tags=["sites"],
 )
 async def get_audit_status(
     domain: str,
-    execution_id: UUID,
+    execution_id: str,  # Accepter string pour gérer les cas spéciaux
     db: AsyncSession = Depends(get_db),
 ) -> AuditStatusResponse:
     """
@@ -2962,22 +3523,59 @@ async def get_audit_status(
     
     Args:
         domain: Domaine analysé
-        execution_id: ID de l'orchestrator execution
+        execution_id: ID de l'orchestrator execution (UUID ou "already-completed")
         db: Session de base de données
         
     Returns:
         Statut global de l'audit avec détails de chaque étape
         
     Raises:
-        HTTPException: 404 si l'orchestrator n'est pas trouvé
+        HTTPException: 404 si l'orchestrator n'est pas trouvé, 422 si execution_id invalide
     """
-    status_response = await _get_audit_status(db, execution_id, domain)
+    # Gérer le cas spécial "already-completed"
+    if execution_id == "already-completed":
+        # Chercher l'orchestrator "completed" le plus récent pour ce domaine
+        from python_scripts.database.models import WorkflowExecution
+        
+        stmt = (
+            select(WorkflowExecution)
+            .where(
+                WorkflowExecution.workflow_type == "audit_orchestrator",
+                WorkflowExecution.status == "completed",
+                WorkflowExecution.input_data["domain"].astext == domain,
+                WorkflowExecution.is_valid == True,
+                WorkflowExecution.was_success == True,
+            )
+            .order_by(desc(WorkflowExecution.end_time))
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        orchestrator = result.scalar_one_or_none()
+        
+        if not orchestrator:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No completed orchestrator found for domain: {domain}",
+            )
+        
+        execution_id_uuid = orchestrator.execution_id
+    else:
+        # Valider que c'est un UUID valide
+        try:
+            execution_id_uuid = UUID(execution_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid execution_id format: {execution_id}. Expected UUID or 'already-completed'",
+            )
+    
+    status_response = await _get_audit_status(db, execution_id_uuid, domain)
     
     # Log pour déboguer le polling continu
     if status_response.overall_status in ("completed", "failed"):
         logger.debug(
             "Audit status requested for completed/failed audit",
-            execution_id=str(execution_id),
+            execution_id=str(execution_id_uuid),
             domain=domain,
             overall_status=status_response.overall_status,
             overall_progress=status_response.overall_progress,
