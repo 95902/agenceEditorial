@@ -71,7 +71,7 @@ class ClusteringConfig:
     
     # Filtering
     min_articles: int = 50
-    max_age_days: int = 365
+    max_age_days: int = 1365
     
     # Outlier handling
     save_outliers: bool = True
