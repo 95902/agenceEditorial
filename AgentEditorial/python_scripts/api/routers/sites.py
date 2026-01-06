@@ -2130,29 +2130,29 @@ async def build_complete_audit_from_database(
         domain_slug = _slugify(domain_label)
         activity_domains_data = _safe_json_field(profile.activity_domains) or {}
         domain_details = activity_domains_data.get("domain_details", {})
-        
+
         summary = None
         if isinstance(domain_details, dict) and domain_slug in domain_details:
             domain_detail = domain_details[domain_slug]
             if isinstance(domain_detail, dict):
                 summary = domain_detail.get("summary")
-        
+
         # Fallback: generate on the fly if not in domain_details
         if not summary:
             summary = _generate_domain_summary_persistent(
                 client_articles, domain_label, _safe_json_field(profile.keywords)
             )
-        
+
         # Always get topics and metrics to enrich the response (structure always present)
         topics = []
         metrics = None
-        
+
         if trend_execution:
             # Always calculate metrics (lightweight operation)
             metrics = await _get_domain_metrics(
                 db, profile, trend_execution, domain_label, client_articles
             )
-            
+
             # Get topics list if requested (can be heavy, so optional)
             if include_topics:
                 topics = await _get_topics_for_domain(
@@ -2167,7 +2167,7 @@ async def build_complete_audit_from_database(
                 avg_relevance=0.0,
                 top_keywords=[],
             )
-        
+
         # Ensure metrics is never None (fallback if something went wrong)
         if metrics is None:
             metrics = DomainMetrics(
@@ -2176,12 +2176,18 @@ async def build_complete_audit_from_database(
                 avg_relevance=0.0,
                 top_keywords=[],
             )
-        
+
+        # Normaliser le score de confiance
+        confidence_normalized = normalize_score(confidence, 0, 100)
+        confidence_label = get_score_label(confidence_normalized, "confidence")
+
         domains_list.append(
             DomainDetail(
                 id=_slugify(domain_label),
                 label=domain_label,
                 confidence=confidence,
+                confidence_normalized=round(confidence_normalized, 3),
+                confidence_label=confidence_label,
                 topics_count=topics_count,  # Maintenant = nombre de clusters pertinents
                 summary=summary,
                 topics=topics,  # Always a list (empty if include_topics=False)
@@ -2962,6 +2968,114 @@ async def _get_topic_details(
         predictions=predictions,
         trend=trend,
     )
+
+
+# ============================================================
+# Score Normalization and Labeling Helpers
+# ============================================================
+
+def normalize_score(value: float, min_val: float = 0, max_val: float = 100) -> float:
+    """
+    Normalize score to 0-1 range.
+
+    Args:
+        value: Score value to normalize
+        min_val: Minimum value in original scale
+        max_val: Maximum value in original scale
+
+    Returns:
+        Normalized score in 0-1 range
+    """
+    if value is None:
+        return 0.0
+    return min(1.0, max(0.0, (value - min_val) / (max_val - min_val)))
+
+
+def get_score_label(score: float, score_type: str = "general") -> str:
+    """
+    Get human-readable label for a normalized score (0-1).
+
+    Args:
+        score: Normalized score (0-1)
+        score_type: Type of score ("confidence", "potential", "differentiation", "general")
+
+    Returns:
+        Human-readable label in French
+    """
+    if score_type == "confidence":
+        # Labels spécifiques pour confidence
+        if score >= 0.7:
+            return "Très élevée"
+        elif score >= 0.5:
+            return "Élevée"
+        elif score >= 0.3:
+            return "Moyenne"
+        elif score >= 0.15:
+            return "Faible"
+        else:
+            return "Très faible"
+
+    elif score_type == "potential":
+        # Labels spécifiques pour potential (tendances éditoriales)
+        if score >= 0.5:
+            return "Très prometteur"
+        elif score >= 0.35:
+            return "Prometteur"
+        elif score >= 0.2:
+            return "Modéré"
+        else:
+            return "Faible potentiel"
+
+    elif score_type == "differentiation":
+        # Labels spécifiques pour differentiation
+        if score >= 0.85:
+            return "Très différenciant"
+        elif score >= 0.75:
+            return "Différenciant"
+        elif score >= 0.65:
+            return "Moyennement différenciant"
+        else:
+            return "Peu différenciant"
+
+    else:
+        # Labels génériques
+        if score >= 0.8:
+            return "Très élevé"
+        elif score >= 0.6:
+            return "Élevé"
+        elif score >= 0.4:
+            return "Moyen"
+        elif score >= 0.2:
+            return "Faible"
+        else:
+            return "Très faible"
+
+
+def add_score_metadata(
+    score_value: float,
+    score_type: str = "general",
+    original_scale: tuple = (0, 100)
+) -> Dict[str, Any]:
+    """
+    Add normalized score and label to a score value.
+
+    Args:
+        score_value: Original score value
+        score_type: Type of score for labeling
+        original_scale: (min, max) of original scale
+
+    Returns:
+        Dict with score, normalized_score, and label
+    """
+    min_val, max_val = original_scale
+    normalized = normalize_score(score_value, min_val, max_val)
+    label = get_score_label(normalized, score_type)
+
+    return {
+        "score": score_value,
+        "normalized": round(normalized, 3),
+        "label": label,
+    }
 
 
 router = APIRouter(prefix="/sites", tags=["sites"])

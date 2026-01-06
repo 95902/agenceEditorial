@@ -243,6 +243,8 @@ class DomainDetail(BaseModel):
     id: str = Field(..., description="Domain slug identifier")
     label: str = Field(..., description="Domain label")
     confidence: int = Field(..., description="Confidence score (0-100)", ge=0, le=100)
+    confidence_normalized: Optional[float] = Field(None, description="Confidence normalized to 0-1 scale", ge=0, le=1)
+    confidence_label: Optional[str] = Field(None, description="Human-readable confidence level (Très faible, Faible, Moyenne, Élevée, Très élevée)")
     topics_count: int = Field(..., description="Number of relevant topic clusters from trend pipeline for this domain", ge=0)
     summary: str = Field(..., description="Domain summary description")
     topics: Optional[List[TopicSummary]] = Field(None, description="List of topics for this domain (if include_topics=True)")

@@ -52,7 +52,21 @@ class TemporalConfig:
         "cohesion": 0.15,
         "size": 0.15,
     })
-    
+
+    # Potential score classification thresholds (calibrated based on real data)
+    # These thresholds define how potential_score (0-1) maps to labels
+    potential_very_high_threshold: float = 0.5  # "Très prometteur"
+    potential_high_threshold: float = 0.35      # "Prometteur"
+    potential_medium_threshold: float = 0.2     # "Modéré"
+    # Below 0.2 = "Faible potentiel"
+
+    # Differentiation score classification thresholds
+    # These thresholds define how differentiation_score (0-1) maps to labels
+    differentiation_very_high_threshold: float = 0.85  # "Très différenciant"
+    differentiation_high_threshold: float = 0.75       # "Différenciant"
+    differentiation_medium_threshold: float = 0.65     # "Moyennement différenciant"
+    # Below 0.65 = "Peu différenciant"
+
     @classmethod
     def default(cls) -> "TemporalConfig":
         """Create default configuration."""
