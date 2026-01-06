@@ -252,7 +252,7 @@ curl -X POST "http://localhost:8000/api/v1/competitors/search" \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "example.com",
-    "max_competitors": 10
+    "max_competitors": 100
   }'
 ```
 

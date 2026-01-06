@@ -133,7 +133,7 @@ class TestCompetitorSearchAPI:
         # Step 1: Start search
         response = await client.post(
             "/api/v1/competitors/search",
-            json={"domain": domain, "max_competitors": 10},
+            json={"domain": domain, "max_competitors": 100},
         )
 
         assert response.status_code == 202

@@ -630,6 +630,36 @@ class EnhancedScrapingAgent(BaseAgent):
                 valid=stats["valid"],
                 duration=duration,
             )
+            
+            # Generate domain summaries after client scraping (issue #002)
+            if is_client_site and stats["valid"] > 0:
+                try:
+                    from python_scripts.database.crud_profiles import get_site_profile_by_domain
+                    from python_scripts.api.routers.sites import (
+                        _save_domain_summaries_to_profile,
+                        _check_trend_pipeline,
+                    )
+                    
+                    profile = await get_site_profile_by_domain(db_session, domain)
+                    if profile:
+                        # Get trend execution if available
+                        trend_exec = await _check_trend_pipeline(db_session, domain)
+                        await _save_domain_summaries_to_profile(
+                            db_session,
+                            profile,
+                            trend_execution=trend_exec,
+                        )
+                        logger.info(
+                            "Domain summaries generated after client scraping",
+                            domain=domain,
+                        )
+                except Exception as e:
+                    # Log but don't fail the scraping
+                    logger.warning(
+                        "Failed to generate domain summaries after scraping",
+                        domain=domain,
+                        error=str(e),
+                    )
 
             return {
                 "domain": domain,
@@ -684,7 +714,7 @@ class EnhancedScrapingAgent(BaseAgent):
         is_client_site = kwargs.get("is_client_site", False)
         site_profile_id = kwargs.get("site_profile_id", None)
         domains = input_data.get("domains", [])
-        max_articles_per_domain = input_data.get("max_articles_per_domain", 100)
+        max_articles_per_domain = input_data.get("max_articles_per_domain", 500)
         client_domain = input_data.get("client_domain")
 
         logger.info(

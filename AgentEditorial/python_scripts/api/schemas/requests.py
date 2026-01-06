@@ -25,13 +25,13 @@ class CompetitorSearchRequest(BaseModel):
     """Request schema for competitor search."""
 
     domain: str = Field(..., description="Domain to find competitors for", examples=["innosys.fr"])
-    max_competitors: int = Field(10, ge=3, le=100, description="Maximum competitors to return (3-100)", examples=[10])
+    max_competitors: int = Field(100, ge=3, le=100, description="Maximum competitors to return (3-100)", examples=[10])
     
     class Config:
         json_schema_extra = {
             "example": {
                 "domain": "innosys.fr",
-                "max_competitors": 10
+                "max_competitors": 100
             }
         }
 

@@ -224,6 +224,8 @@ class DomainDetail(BaseModel):
     confidence: int = Field(..., description="Confidence score (0-100)", ge=0, le=100)
     topics_count: int = Field(..., description="Number of relevant topic clusters from trend pipeline for this domain", ge=0)
     summary: str = Field(..., description="Domain summary description")
+    topics: Optional[List[TopicSummary]] = Field(None, description="List of topics for this domain (if include_topics=True)")
+    metrics: Optional[DomainMetrics] = Field(None, description="Aggregated metrics for this domain")
 
 
 class WorkflowStep(BaseModel):
@@ -277,6 +279,42 @@ class PendingAuditResponse(BaseModel):
     message: str = Field(..., description="Status message")
     workflow_steps: List[WorkflowStep] = Field(..., description="List of workflow steps")
     data_status: DataStatus = Field(..., description="Current data availability status")
+
+
+class TrendingTopicsSection(BaseModel):
+    """Section for trending topics."""
+
+    title: str = Field(default="Tendances en hausse", description="Section title")
+    description: str = Field(default="Topics avec la plus forte croissance", description="Section description")
+    topics: List[TrendingTopic] = Field(..., description="List of trending topics")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics")
+
+
+class TrendAnalysesSection(BaseModel):
+    """Section for trend analyses."""
+
+    title: str = Field(default="Analyses de tendances", description="Section title")
+    description: str = Field(default="Synthèses générées par IA sur les tendances", description="Section description")
+    analyses: List[TrendAnalysisDetail] = Field(..., description="List of trend analyses")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics")
+
+
+class TemporalInsightsSection(BaseModel):
+    """Section for temporal insights."""
+
+    title: str = Field(default="Évolution temporelle des tendances", description="Section title")
+    description: str = Field(default="Analyse de la croissance et de la fraîcheur des topics", description="Section description")
+    insights: List[TemporalInsight] = Field(..., description="List of temporal insights")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics")
+
+
+class EditorialOpportunitiesSection(BaseModel):
+    """Section for editorial opportunities."""
+
+    title: str = Field(default="Opportunités éditoriales", description="Section title")
+    description: str = Field(default="Suggestions d'articles générées par IA", description="Section description")
+    recommendations: List[EditorialOpportunity] = Field(..., description="List of article recommendations")
+    summary: Optional[Dict[str, Any]] = Field(None, description="Summary statistics")
 
 
 class SiteAuditResponse(BaseModel):
