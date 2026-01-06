@@ -47,8 +47,9 @@ class TemporalAnalyzer:
         
         now = datetime.now(timezone.utc)
         
-        # Extract timestamps
+        # Extract timestamps with fallback to created_at
         timestamps = []
+        missing_timestamp_count = 0
         for doc in documents:
             ts = doc.get("published_date") or doc.get("created_at")
             if ts:
@@ -59,14 +60,23 @@ class TemporalAnalyzer:
                         if ts.tzinfo is None:
                             ts = ts.replace(tzinfo=timezone.utc)
                     except ValueError:
+                        missing_timestamp_count += 1
                         continue
                 elif isinstance(ts, datetime):
                     # Ensure timezone-aware (assume UTC if naive)
                     if ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
                 timestamps.append(ts)
-        
+            else:
+                missing_timestamp_count += 1
+
         if not timestamps:
+            logger.warning(
+                "No valid timestamps found for topic, returning empty metrics",
+                topic_id=topic_id,
+                total_docs=len(documents),
+                missing_count=missing_timestamp_count,
+            )
             return self._empty_metrics(topic_id)
         
         # Calculate metrics for each window
@@ -361,8 +371,9 @@ class TemporalAnalyzer:
             
             for doc in documents:
                 idx = doc.get("index")
-                ts = doc.get("published_date")
-                
+                # Fallback to created_at if published_date is missing (fix issue #7)
+                ts = doc.get("published_date") or doc.get("created_at")
+
                 if idx is None or ts is None:
                     continue
                 
