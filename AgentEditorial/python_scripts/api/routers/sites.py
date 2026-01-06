@@ -343,7 +343,14 @@ async def _count_topics_for_domain(
     
     # Count relevant clusters
     relevant_count = 0
-    
+    total_clusters = len(clusters)
+
+    logger.debug(
+        f"Counting topics for domain '{domain_label}': {total_clusters} clusters to check",
+        domain=domain_label,
+        total_clusters=total_clusters,
+    )
+
     for cluster in clusters:
         # Get articles for this cluster
         cluster_articles_by_topic = [
@@ -373,18 +380,29 @@ async def _count_topics_for_domain(
         
         # Fallback: check cluster metadata or competitor articles
         if matching_count == 0:
+            # Amélioration: utiliser mots-clés plus flexibles (>2 chars au lieu de >3)
             domain_keywords = set(domain_label.lower().split())
-            domain_keywords = {kw for kw in domain_keywords if len(kw) > 3}
-            
+            domain_keywords = {kw for kw in domain_keywords if len(kw) > 2}  # Plus souple
+
             label_lower = cluster.label.lower() if cluster.label else ""
             top_terms = cluster.top_terms.get("terms", []) if cluster.top_terms else []
             top_terms_str = " ".join(str(t).lower() for t in top_terms[:15])
-            
+
+            # Amélioration: vérifier similarité partielle (contain) plutôt qu'égalité exacte
             cluster_matches = any(
                 keyword in label_lower or keyword in top_terms_str
                 for keyword in domain_keywords
             )
-            
+
+            # Nouveau: si le domaine est "cloud computing" et le cluster parle de "cloud", c'est pertinent
+            # Vérifier les mots individuels du domaine dans les termes du cluster
+            if not cluster_matches:
+                for keyword in domain_keywords:
+                    if any(keyword in term.lower() for term in top_terms[:20] if isinstance(term, str)):
+                        cluster_matches = True
+                        break
+
+            # Fallback: vérifier si des articles concurrents matchent ce domaine
             if not cluster_matches and cluster_articles:
                 competitor_articles = [
                     art for art in cluster_articles
@@ -394,13 +412,20 @@ async def _count_topics_for_domain(
                     competitor_matching_count = _count_articles_for_domain(competitor_articles, domain_label)
                     if competitor_matching_count > 0:
                         cluster_matches = True
-            
+
             if cluster_matches:
                 matching_count = 1
         
         if matching_count > 0:
             relevant_count += 1
-    
+
+    logger.debug(
+        f"Topic count for domain '{domain_label}': {relevant_count}/{total_clusters} clusters matched",
+        domain=domain_label,
+        relevant_count=relevant_count,
+        total_clusters=total_clusters,
+    )
+
     return relevant_count
 
 
