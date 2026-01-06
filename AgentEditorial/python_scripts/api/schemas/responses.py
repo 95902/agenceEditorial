@@ -1,6 +1,7 @@
 """Pydantic response schemas for API endpoints."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
@@ -173,6 +174,48 @@ class ErrorResponse(BaseModel):
 # Site Audit Response Schemas
 # ============================================================
 
+class IssueSeverity(str, Enum):
+    """Severité d'un problème détecté dans l'audit."""
+
+    CRITICAL = "critical"
+    WARNING = "warning"
+    INFO = "info"
+
+
+class IssueCode(str, Enum):
+    """Codes d'erreur structurés pour les problèmes détectés."""
+
+    # Confiance faible
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+
+    # Pollution boilerplate
+    BOILERPLATE_DETECTED = "BOILERPLATE_DETECTED"
+    DUPLICATE_KEYWORDS = "DUPLICATE_KEYWORDS"
+
+    # LLM incomplet
+    LLM_PARSE_FAILED = "LLM_PARSE_FAILED"
+    MISSING_OPPORTUNITIES = "MISSING_OPPORTUNITIES"
+    MISSING_SATURATED_ANGLES = "MISSING_SATURATED_ANGLES"
+
+    # Incohérences
+    TOPICS_COUNT_MISMATCH = "TOPICS_COUNT_MISMATCH"
+    MISSING_FRESHNESS = "MISSING_FRESHNESS"
+
+    # Qualité des données
+    INSUFFICIENT_ARTICLES = "INSUFFICIENT_ARTICLES"
+    NO_COMPETITORS = "NO_COMPETITORS"
+
+
+class AuditIssue(BaseModel):
+    """Problème détecté dans l'audit avec suggestion de résolution."""
+
+    code: IssueCode = Field(..., description="Code d'erreur structuré")
+    severity: IssueSeverity = Field(..., description="Niveau de sévérité")
+    message: str = Field(..., description="Description du problème")
+    suggestion: str = Field(..., description="Suggestion de résolution")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexte additionnel (domaines affectés, valeurs, etc.)")
+
+
 class DomainDetail(BaseModel):
     """Response schema for activity domain detail."""
 
@@ -268,6 +311,10 @@ class SiteAuditResponse(BaseModel):
         example=[{"name": "TechNews.fr", "similarity": 85}],
     )
     took_ms: int = Field(..., description="Analysis duration in milliseconds", ge=0)
+    issues: List[AuditIssue] = Field(
+        default_factory=list,
+        description="Liste des problèmes détectés dans l'audit avec suggestions de résolution",
+    )
 
 
 class AuditStatusResponse(BaseModel):

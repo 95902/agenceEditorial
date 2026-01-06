@@ -919,6 +919,137 @@ async def _check_trend_pipeline(
     return result.scalar_one_or_none()
 
 
+def detect_audit_issues(
+    domains_list: List[Any],
+    competitors: List[Dict[str, Any]],
+    trend_execution: Optional[Any],
+    client_articles: List[Any],
+) -> List[Any]:
+    """
+    Détecte les problèmes dans les données d'audit et génère des issues structurées.
+
+    Args:
+        domains_list: Liste des domaines d'activité avec confidence, topics_count, etc.
+        competitors: Liste des concurrents
+        trend_execution: Exécution du pipeline de tendances (peut être None)
+        client_articles: Articles du client
+
+    Returns:
+        Liste d'AuditIssue détectant les problèmes
+    """
+    from python_scripts.api.schemas.responses import (
+        AuditIssue,
+        IssueCode,
+        IssueSeverity,
+    )
+
+    issues = []
+
+    # 1. Détecter confiance faible (< 15%)
+    low_confidence_domains = [d for d in domains_list if d.confidence < 15]
+    if low_confidence_domains:
+        domain_names = [d.label for d in low_confidence_domains]
+        issues.append(
+            AuditIssue(
+                code=IssueCode.LOW_CONFIDENCE,
+                severity=IssueSeverity.CRITICAL,
+                message=f"{len(low_confidence_domains)} domaine(s) avec confiance < 15%",
+                suggestion="Vérifier la qualité du scraping et l'extraction de contenu. Implémenter Trafilatura pour éviter la pollution boilerplate.",
+                context={"affected_domains": domain_names},
+            )
+        )
+
+    # 2. Détecter keywords dupliqués (pollution boilerplate)
+    # Extraire les mots-clés des articles client pour détecter la duplication
+    keyword_sets = {}
+    for article in client_articles:
+        # Si l'article a des métadonnées keywords
+        if hasattr(article, "metadata") and article.metadata:
+            kw = article.metadata.get("keywords", [])
+            if kw:
+                domain_label = article.metadata.get("domain", "unknown")
+                if domain_label not in keyword_sets:
+                    keyword_sets[domain_label] = set()
+                keyword_sets[domain_label].update(kw[:5])  # Top 5 keywords
+
+    # Comparer les sets de keywords entre domaines
+    if len(keyword_sets) >= 2:
+        domain_pairs_similar = []
+        domain_names = list(keyword_sets.keys())
+        for i in range(len(domain_names)):
+            for j in range(i + 1, len(domain_names)):
+                d1, d2 = domain_names[i], domain_names[j]
+                intersection = keyword_sets[d1] & keyword_sets[d2]
+                # Si > 60% de similitude dans les keywords
+                similarity = len(intersection) / min(len(keyword_sets[d1]), len(keyword_sets[d2]))
+                if similarity > 0.6:
+                    domain_pairs_similar.append((d1, d2))
+
+        if domain_pairs_similar:
+            issues.append(
+                AuditIssue(
+                    code=IssueCode.DUPLICATE_KEYWORDS,
+                    severity=IssueSeverity.CRITICAL,
+                    message=f"{len(domain_pairs_similar)} paire(s) de domaines avec keywords identiques (>60% similitude)",
+                    suggestion="Pollution boilerplate détectée. Activer Trafilatura pour nettoyer le contenu extrait.",
+                    context={"similar_pairs": [f"{p[0]} ↔ {p[1]}" for p in domain_pairs_similar]},
+                )
+            )
+
+    # 3. Détecter absence de concurrents
+    if not competitors or len(competitors) == 0:
+        issues.append(
+            AuditIssue(
+                code=IssueCode.NO_COMPETITORS,
+                severity=IssueSeverity.WARNING,
+                message="Aucun concurrent identifié",
+                suggestion="Lancer la recherche de concurrents ou ajouter manuellement des concurrents.",
+                context={},
+            )
+        )
+
+    # 4. Détecter articles insuffisants
+    if len(client_articles) < 5:
+        issues.append(
+            AuditIssue(
+                code=IssueCode.INSUFFICIENT_ARTICLES,
+                severity=IssueSeverity.WARNING,
+                message=f"Seulement {len(client_articles)} article(s) analysé(s) (recommandé: 5+)",
+                suggestion="Lancer le scraping des articles client pour améliorer l'analyse.",
+                context={"articles_count": len(client_articles)},
+            )
+        )
+
+    # 5. Détecter incohérence topics_count
+    # Si topics_count = 0 pour tous les domaines alors que trend_execution existe
+    if trend_execution:
+        all_zero_topics = all(d.topics_count == 0 for d in domains_list)
+        if all_zero_topics and len(domains_list) > 0:
+            issues.append(
+                AuditIssue(
+                    code=IssueCode.TOPICS_COUNT_MISMATCH,
+                    severity=IssueSeverity.WARNING,
+                    message="Tous les domaines ont topics_count=0 malgré un pipeline de tendances complété",
+                    suggestion="Vérifier la logique de mapping entre topics et domaines dans _count_topics_for_domain().",
+                    context={},
+                )
+            )
+
+    # 6. Détecter pipeline de tendances manquant
+    if not trend_execution:
+        issues.append(
+            AuditIssue(
+                code=IssueCode.MISSING_OPPORTUNITIES,
+                severity=IssueSeverity.INFO,
+                message="Pipeline de tendances non exécuté",
+                suggestion="Lancer le pipeline de tendances pour enrichir l'analyse avec opportunities et saturated_angles.",
+                context={},
+            )
+        )
+
+    return issues
+
+
 async def build_complete_audit_from_database(
     db: AsyncSession,
     domain: str,
@@ -1066,7 +1197,15 @@ async def build_complete_audit_from_database(
     
     if last_execution and last_execution.duration_seconds:
         took_ms = last_execution.duration_seconds * 1000
-    
+
+    # 8. Détection des problèmes (issues)
+    issues = detect_audit_issues(
+        domains_list=domains_list,
+        competitors=competitors,
+        trend_execution=trend_execution,
+        client_articles=client_articles,
+    )
+
     return SiteAuditResponse(
         url=url,
         profile={
@@ -1077,6 +1216,7 @@ async def build_complete_audit_from_database(
         audience=audience,
         competitors=competitors,
         took_ms=took_ms,
+        issues=issues,
     )
 
 
