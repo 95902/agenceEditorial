@@ -131,6 +131,36 @@ async def run_enhanced_scraping_background(
 
                     all_results[domain] = result
                     stats = result.get("statistics", {})
+                    
+                    # Generate domain summaries after client scraping (issue #002)
+                    if is_client_site and stats.get("valid", 0) > 0:
+                        try:
+                            from python_scripts.api.routers.sites import (
+                                _save_domain_summaries_to_profile,
+                                _check_trend_pipeline,
+                            )
+                            from python_scripts.database.crud_profiles import get_site_profile_by_domain
+                            
+                            profile = await get_site_profile_by_domain(db_session, domain)
+                            if profile:
+                                # Get trend execution if available
+                                trend_exec = await _check_trend_pipeline(db_session, domain)
+                                await _save_domain_summaries_to_profile(
+                                    db_session,
+                                    profile,
+                                    trend_execution=trend_exec,
+                                )
+                                logger.info(
+                                    "Domain summaries generated after client scraping",
+                                    domain=domain,
+                                )
+                        except Exception as e:
+                            # Log but don't fail the scraping
+                            logger.warning(
+                                "Failed to generate domain summaries after scraping",
+                                domain=domain,
+                                error=str(e),
+                            )
 
                     global_stats["total_articles_discovered"] += stats.get("discovered", 0)
                     global_stats["total_articles_scraped"] += stats.get("scraped", 0)

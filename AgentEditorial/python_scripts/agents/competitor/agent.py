@@ -267,7 +267,7 @@ class CompetitorSearchAgent(BaseAgent):
     async def search_competitors(
         self,
         domain: str,
-        max_competitors: int = 10,
+        max_competitors: int = 100,
         db_session: AsyncSession = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -652,7 +652,7 @@ class CompetitorSearchAgent(BaseAgent):
                     ],
                 )
             
-            final_competitors = self.scorer.apply_final_filters(diverse, min_competitors=10)
+            final_competitors = self.scorer.apply_final_filters(diverse, min_competitors=25)
             final_competitors = final_competitors[:max_competitors]
             step12_duration = time.time() - step12_start
             logger.info(
@@ -774,7 +774,7 @@ class CompetitorSearchAgent(BaseAgent):
             - domain: Domaine analysé
         """
         domain = input_data.get("domain", "")
-        max_competitors = input_data.get("max_competitors", 10)
+        max_competitors = input_data.get("max_competitors", 100)
 
         if not domain:
             raise ValueError("Domain is required for competitor search")

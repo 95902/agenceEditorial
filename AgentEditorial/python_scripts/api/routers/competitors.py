@@ -282,7 +282,7 @@ async def search_competitors(
         ```bash
         curl -X POST "http://localhost:8000/api/v1/competitors/search" \\
           -H "Content-Type: application/json" \\
-          -d '{"domain": "innosys.fr", "max_competitors": 10}'
+          -d '{"domain": "innosys.fr", "max_competitors": 100}'
         ```
 
         Response:
