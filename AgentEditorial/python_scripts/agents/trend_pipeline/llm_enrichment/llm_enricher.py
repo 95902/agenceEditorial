@@ -107,10 +107,10 @@ class LLMEnricher:
                 model=model,
                 timeout=self.config.synthesis_timeout_seconds,
             )
-            
+
             # Parse JSON response
             result = self._parse_json_response(response)
-            
+
             # Ensure result is a dictionary
             if not isinstance(result, dict):
                 logger.warning(
@@ -119,10 +119,44 @@ class LLMEnricher:
                     result_preview=str(result)[:200]
                 )
                 result = {"raw_response": str(result)}
-            
+
+            # CRITICAL: Validate required fields (fix for ANALYSE-PROBLEMES #2)
+            # Ensure opportunities and saturated_angles exist
+            if "synthesis" not in result or not result.get("synthesis"):
+                logger.error(
+                    "LLM response missing 'synthesis' field",
+                    topic=topic_label,
+                    result_keys=list(result.keys())
+                )
+                result["synthesis"] = f"Tendance sur {topic_label} avec {volume} articles."
+
+            if "saturated_angles" not in result or result["saturated_angles"] is None:
+                logger.warning(
+                    "LLM response missing 'saturated_angles', setting to empty list",
+                    topic=topic_label,
+                    result_keys=list(result.keys()),
+                    response_preview=response[:200]
+                )
+                result["saturated_angles"] = []
+
+            if "opportunities" not in result or result["opportunities"] is None:
+                logger.warning(
+                    "LLM response missing 'opportunities', setting to empty list",
+                    topic=topic_label,
+                    result_keys=list(result.keys()),
+                    response_preview=response[:200]
+                )
+                result["opportunities"] = []
+
+            # Ensure they are lists, not strings
+            if isinstance(result.get("saturated_angles"), str):
+                result["saturated_angles"] = [result["saturated_angles"]]
+            if isinstance(result.get("opportunities"), str):
+                result["opportunities"] = [result["opportunities"]]
+
             result["llm_model_used"] = model
             return result
-            
+
         except Exception as e:
             logger.error("Trend synthesis failed", error=str(e))
             return {

@@ -1,6 +1,7 @@
 """Pydantic response schemas for API endpoints."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
@@ -173,111 +174,46 @@ class ErrorResponse(BaseModel):
 # Site Audit Response Schemas
 # ============================================================
 
-class TopicSummary(BaseModel):
-    """Lightweight topic summary for domain details."""
+class IssueSeverity(str, Enum):
+    """Severité d'un problème détecté dans l'audit."""
 
-    id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride-5"])
-    title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
-    summary: str = Field(..., description="Topic summary", examples=["Analyse des tendances émergentes..."])
-    keywords: List[str] = Field(..., description="Topic keywords", examples=[["edge computing", "cloud hybride"]])
-    relevance_score: Optional[int] = Field(None, description="Relevance score (0-100)", examples=[95], ge=0, le=100)
-    trend: Optional[str] = Field(None, description="Trend direction: up, stable, down", examples=["up"])
-    category: Optional[str] = Field(None, description="Topic category/scope", examples=["core"])
+    CRITICAL = "critical"
+    WARNING = "warning"
+    INFO = "info"
 
 
-class DomainMetrics(BaseModel):
-    """Aggregated metrics for a domain."""
+class IssueCode(str, Enum):
+    """Codes d'erreur structurés pour les problèmes détectés."""
 
-    total_articles: int = Field(..., description="Total number of articles in this domain", ge=0)
-    trending_topics: int = Field(..., description="Number of trending topics (velocity > 0.5)", ge=0)
-    avg_relevance: float = Field(..., description="Average relevance score across topics", ge=0, le=100)
-    top_keywords: List[str] = Field(..., description="Top keywords across all topics in this domain", examples=[["AWS", "Azure", "Kubernetes"]])
+    # Confiance faible
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
 
+    # Pollution boilerplate
+    BOILERPLATE_DETECTED = "BOILERPLATE_DETECTED"
+    DUPLICATE_KEYWORDS = "DUPLICATE_KEYWORDS"
 
-class TrendingTopic(BaseModel):
-    """Topic with growth metrics."""
+    # LLM incomplet
+    LLM_PARSE_FAILED = "LLM_PARSE_FAILED"
+    MISSING_OPPORTUNITIES = "MISSING_OPPORTUNITIES"
+    MISSING_SATURATED_ANGLES = "MISSING_SATURATED_ANGLES"
 
-    id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride-5"])
-    title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
-    category: Optional[str] = Field(None, description="Topic category/scope", examples=["core"])
-    growth_rate: float = Field(..., description="Growth rate percentage", examples=[35.5])
-    volume: int = Field(..., description="Number of articles in the topic", ge=0, examples=[1250])
-    velocity: Optional[float] = Field(None, description="Velocity score (growth rate)", examples=[0.85])
-    freshness: Optional[float] = Field(None, description="Freshness ratio (0-1)", examples=[0.72], ge=0, le=1)
-    source_diversity: int = Field(..., description="Number of different source domains", ge=0, examples=[8])
-    potential_score: Optional[float] = Field(None, description="Potential score (0-100)", examples=[92], ge=0, le=100)
-    keywords: List[str] = Field(..., description="Topic keywords", examples=[["edge computing", "cloud hybride"]])
-    related_domain: Optional[str] = Field(None, description="Related activity domain", examples=["Cloud Computing"])
+    # Incohérences
+    TOPICS_COUNT_MISMATCH = "TOPICS_COUNT_MISMATCH"
+    MISSING_FRESHNESS = "MISSING_FRESHNESS"
 
-
-class SaturatedAngle(BaseModel):
-    """Saturated editorial angle."""
-
-    angle: str = Field(..., description="Angle title", examples=["Définition technique"])
-    frequency: str = Field(..., description="Frequency level", examples=["Élevée"])
-    reason: Optional[str] = Field(None, description="Reason for saturation", examples=["Beaucoup d'articles concurrents couvrent cet angle"])
+    # Qualité des données
+    INSUFFICIENT_ARTICLES = "INSUFFICIENT_ARTICLES"
+    NO_COMPETITORS = "NO_COMPETITORS"
 
 
-class EditorialOpportunityDetail(BaseModel):
-    """Editorial opportunity from trend analysis."""
+class AuditIssue(BaseModel):
+    """Problème détecté dans l'audit avec suggestion de résolution."""
 
-    angle: str = Field(..., description="Angle title", examples=["Guide pratique d'implémentation"])
-    potential: str = Field(..., description="Potential level", examples=["Élevé"])
-    differentiation: Optional[str] = Field(None, description="Differentiation strategy", examples=["Peu de concurrents proposent des guides actionnables"])
-    effort: Optional[str] = Field(None, description="Effort level", examples=["Moyen"])
-
-
-class TrendAnalysisDetail(BaseModel):
-    """Trend analysis with opportunities and saturated angles."""
-
-    topic_id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride-5"])
-    topic_title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
-    synthesis: str = Field(..., description="Trend synthesis", examples=["Cette tendance montre une adoption croissante..."])
-    saturated_angles: Optional[List[SaturatedAngle]] = Field(None, description="Saturated editorial angles")
-    opportunities: Optional[List[EditorialOpportunityDetail]] = Field(None, description="Editorial opportunities")
-    llm_model: Optional[str] = Field(None, description="LLM model used", examples=["llama3"])
-    generated_at: Optional[datetime] = Field(None, description="Generation timestamp")
-
-
-class TimeWindow(BaseModel):
-    """Temporal metrics for a time window."""
-
-    period: str = Field(..., description="Time period label", examples=["30 derniers jours"])
-    volume: int = Field(..., description="Number of articles in the window", ge=0, examples=[1250])
-    velocity: Optional[float] = Field(None, description="Velocity score", examples=[0.85])
-    freshness_ratio: Optional[float] = Field(None, description="Freshness ratio (0-1)", examples=[0.72], ge=0, le=1)
-    trend_direction: Optional[str] = Field(None, description="Trend direction: up, stable, down", examples=["up"])
-    drift_detected: bool = Field(False, description="Whether drift was detected")
-
-
-class TemporalInsight(BaseModel):
-    """Temporal metrics insight for a topic."""
-
-    topic_id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride-5"])
-    topic_title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
-    time_windows: List[TimeWindow] = Field(..., description="Temporal metrics by time window")
-    cohesion_score: Optional[float] = Field(None, description="Cohesion score (0-1)", examples=[0.88], ge=0, le=1)
-    potential_score: Optional[float] = Field(None, description="Potential score (0-100)", examples=[92], ge=0, le=100)
-    source_diversity: int = Field(..., description="Number of different source domains", ge=0, examples=[8])
-
-
-class EditorialOpportunity(BaseModel):
-    """Article recommendation as editorial opportunity."""
-
-    id: int = Field(..., description="Recommendation ID", examples=[123])
-    topic_id: str = Field(..., description="Topic identifier (slug)", examples=["edge-cloud-hybride-5"])
-    topic_title: str = Field(..., description="Topic title", examples=["L'avenir de l'edge computing dans le cloud hybride"])
-    article_title: str = Field(..., description="Recommended article title", examples=["Guide complet : Implémenter l'edge computing en entreprise"])
-    hook: str = Field(..., description="Article hook/lead", examples=["L'edge computing transforme la façon dont les entreprises..."])
-    effort_level: str = Field(..., description="Effort level", examples=["medium"])
-    effort_label: str = Field(..., description="Effort level label", examples=["Effort moyen"])
-    differentiation_score: Optional[float] = Field(None, description="Differentiation score (0-100)", examples=[87], ge=0, le=100)
-    differentiation_label: Optional[str] = Field(None, description="Differentiation label", examples=["Très différenciant"])
-    status: str = Field(..., description="Recommendation status", examples=["suggested"])
-    status_label: str = Field(..., description="Status label", examples=["Suggéré"])
-    outline: Optional[Dict[str, Any]] = Field(None, description="Article outline")
-    related_domain: Optional[str] = Field(None, description="Related activity domain", examples=["Cloud Computing"])
-    created_at: datetime = Field(..., description="Creation timestamp")
+    code: IssueCode = Field(..., description="Code d'erreur structuré")
+    severity: IssueSeverity = Field(..., description="Niveau de sévérité")
+    message: str = Field(..., description="Description du problème")
+    suggestion: str = Field(..., description="Suggestion de résolution")
+    context: Optional[Dict[str, Any]] = Field(None, description="Contexte additionnel (domaines affectés, valeurs, etc.)")
 
 
 class DomainDetail(BaseModel):
@@ -413,10 +349,10 @@ class SiteAuditResponse(BaseModel):
         example=[{"name": "TechNews.fr", "similarity": 85}],
     )
     took_ms: int = Field(..., description="Analysis duration in milliseconds", ge=0)
-    trending_topics: Optional[TrendingTopicsSection] = Field(None, description="Trending topics section")
-    trend_analyses: Optional[TrendAnalysesSection] = Field(None, description="Trend analyses section")
-    temporal_insights: Optional[TemporalInsightsSection] = Field(None, description="Temporal insights section")
-    editorial_opportunities: Optional[EditorialOpportunitiesSection] = Field(None, description="Editorial opportunities section")
+    issues: List[AuditIssue] = Field(
+        default_factory=list,
+        description="Liste des problèmes détectés dans l'audit avec suggestions de résolution",
+    )
 
 
 class AuditStatusResponse(BaseModel):

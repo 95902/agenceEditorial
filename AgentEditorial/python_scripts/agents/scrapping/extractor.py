@@ -1,13 +1,20 @@
-"""Phase 3: Adaptive article extraction."""
+"""Phase 3: Adaptive article extraction with boilerplate removal."""
 
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
+
+try:
+    from trafilatura import extract
+    from trafilatura.settings import use_config
+    TRAFILATURA_AVAILABLE = True
+except ImportError:
+    TRAFILATURA_AVAILABLE = False
 
 from python_scripts.utils.logging import get_logger
 
@@ -75,11 +82,25 @@ AUTHOR_SELECTORS_PRIORITY = [
 
 
 class AdaptiveExtractor:
-    """Adaptive article extractor using site profile."""
+    """Adaptive article extractor using site profile with boilerplate removal."""
 
-    def __init__(self, timeout: float = 30.0):
-        """Initialize the extractor."""
+    def __init__(self, timeout: float = 30.0, use_trafilatura: bool = True):
+        """
+        Initialize the extractor.
+
+        Args:
+            timeout: HTTP timeout in seconds
+            use_trafilatura: Use Trafilatura for boilerplate removal (recommended)
+        """
         self.timeout = timeout
+        self.use_trafilatura = use_trafilatura and TRAFILATURA_AVAILABLE
+
+        if self.use_trafilatura:
+            logger.info("Trafilatura boilerplate removal enabled")
+        else:
+            if use_trafilatura and not TRAFILATURA_AVAILABLE:
+                logger.warning("Trafilatura requested but not available, falling back to CSS selectors")
+            logger.info("Using CSS selectors only (no boilerplate removal)")
 
     async def extract_article_adaptive(
         self,
@@ -88,7 +109,13 @@ class AdaptiveExtractor:
         profile: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Extract article using site profile for optimization.
+        Extract article using site profile with boilerplate removal.
+
+        Strategy:
+        1. Try Trafilatura for clean content extraction (RECOMMENDED - removes boilerplate)
+        2. Fallback to structured data (JSON-LD, Open Graph)
+        3. Fallback to profile selectors
+        4. Fallback to generic CSS selectors
 
         Args:
             html: HTML content
@@ -96,29 +123,53 @@ class AdaptiveExtractor:
             profile: Site discovery profile
 
         Returns:
-            Dictionary with extracted article data
+            Dictionary with extracted article data including data quality metrics
         """
         soup = BeautifulSoup(html, "html.parser")
         article = {}
+        extraction_method = "unknown"
 
-        # 1. Try structured data first (JSON-LD, Open Graph)
+        # 1. TRY TRAFILATURA FIRST (Best - removes header/footer/nav)
+        if self.use_trafilatura:
+            trafilatura_content, trafilatura_metadata = self._extract_with_trafilatura(html, url)
+            if trafilatura_content:
+                article["content"] = trafilatura_content
+                article["extraction_method"] = "trafilatura"
+                extraction_method = "trafilatura"
+
+                # Use trafilatura metadata as base
+                if trafilatura_metadata.get("title"):
+                    article["title"] = trafilatura_metadata["title"]
+                if trafilatura_metadata.get("author"):
+                    article["author"] = trafilatura_metadata["author"]
+                if trafilatura_metadata.get("date"):
+                    article["published_time"] = trafilatura_metadata["date"]
+
+                logger.debug(f"Trafilatura extraction successful for {url}")
+
+        # 2. Try structured data (JSON-LD, Open Graph)
         jsonld = self._extract_jsonld_info(html, soup)
         if jsonld.get("is_article"):
-            article.update(jsonld.get("metadata", {}))
+            # Complement with JSON-LD if not already extracted
+            for key, value in jsonld.get("metadata", {}).items():
+                if not article.get(key) and value:
+                    article[key] = value
 
         opengraph = self._extract_opengraph_info(html, soup)
         if opengraph.get("is_article"):
-            # Complement with OG if not in JSON-LD
+            # Complement with OG if not in other sources
             for key in ["title", "description", "published_time", "author"]:
                 if not article.get(key) and opengraph.get(key):
                     article[key] = opengraph[key]
 
-        # 2. Use profile selectors (if available)
-        if profile.get("content_selector"):
+        # 3. Use profile selectors (if available and content not already extracted)
+        if not article.get("content") and profile.get("content_selector"):
             content = soup.select_one(profile["content_selector"])
             if content:
                 article["content"] = self._clean_text(content.get_text())
                 article["content_html"] = str(content)
+                article["extraction_method"] = "profile_selector"
+                extraction_method = "profile_selector"
 
         if profile.get("title_selector") and not article.get("title"):
             title = soup.select_one(profile["title_selector"])
@@ -137,7 +188,7 @@ class AdaptiveExtractor:
             if author:
                 article["author"] = self._clean_text(author.get_text())
 
-        # 3. Fallback to generic selectors
+        # 4. Fallback to generic selectors
         if not article.get("content"):
             for selector in CONTENT_SELECTORS_PRIORITY:
                 content = soup.select_one(selector)
@@ -145,6 +196,8 @@ class AdaptiveExtractor:
                     article["content"] = self._clean_text(content.get_text())
                     article["content_html"] = str(content)
                     article["_content_selector_used"] = selector
+                    article["extraction_method"] = f"css_selector:{selector}"
+                    extraction_method = "css_selector"
                     break
 
         if not article.get("title"):
@@ -173,10 +226,17 @@ class AdaptiveExtractor:
                     article["_author_selector_used"] = selector
                     break
 
-        # 4. Calculate metrics
+        # 5. Calculate metrics and data quality
         content_text = article.get("content", "")
         article["word_count"] = len(content_text.split())
         article["url"] = url
+
+        # Add data quality metrics
+        article["data_quality"] = self._calculate_data_quality(
+            article=article,
+            html=html,
+            extraction_method=extraction_method
+        )
 
         return article
 
@@ -300,6 +360,109 @@ class AdaptiveExtractor:
         # Remove leading/trailing whitespace
         text = text.strip()
         return text
+
+    def _extract_with_trafilatura(
+        self,
+        html: str,
+        url: str,
+    ) -> Tuple[Optional[str], Dict[str, Any]]:
+        """
+        Extract clean content using Trafilatura (boilerplate removal).
+
+        Args:
+            html: HTML content
+            url: Article URL
+
+        Returns:
+            Tuple of (clean_content, metadata)
+        """
+        if not TRAFILATURA_AVAILABLE:
+            return None, {}
+
+        try:
+            # Extract with metadata
+            clean_content = extract(
+                html,
+                include_comments=False,
+                include_tables=True,
+                no_fallback=False,
+                favor_precision=False,  # Favor recall to get more content
+                output_format="txt",
+                url=url,
+            )
+
+            # Extract metadata separately
+            from trafilatura.metadata import extract_metadata
+            metadata_obj = extract_metadata(html, url=url)
+
+            metadata = {}
+            if metadata_obj:
+                metadata = {
+                    "title": metadata_obj.title,
+                    "author": metadata_obj.author,
+                    "date": metadata_obj.date,
+                    "sitename": metadata_obj.sitename,
+                }
+
+            return clean_content, metadata
+
+        except Exception as e:
+            logger.warning(f"Trafilatura extraction failed for {url}: {e}")
+            return None, {}
+
+    def _calculate_data_quality(
+        self,
+        article: Dict[str, Any],
+        html: str,
+        extraction_method: str,
+    ) -> Dict[str, Any]:
+        """
+        Calculate data quality metrics to detect boilerplate pollution.
+
+        Args:
+            article: Extracted article data
+            html: Original HTML
+            extraction_method: Method used for extraction
+
+        Returns:
+            Dictionary with quality metrics
+        """
+        content_text = article.get("content", "")
+        word_count = len(content_text.split())
+
+        # Calculate content density (content words / total HTML size)
+        html_size = len(html)
+        content_density = (len(content_text) / html_size) if html_size > 0 else 0
+
+        # Detect boilerplate pollution
+        # Check for common boilerplate indicators in content
+        boilerplate_indicators = [
+            "menu", "navigation", "footer", "header", "sidebar",
+            "copyright", "all rights reserved", "politique de confidentialité",
+            "mentions légales", "cookies", "contact us",
+        ]
+
+        boilerplate_score = 0
+        content_lower = content_text.lower()
+        for indicator in boilerplate_indicators:
+            if indicator in content_lower:
+                boilerplate_score += 1
+
+        # Boilerplate detected if score > 3 and low density
+        boilerplate_detected = boilerplate_score > 3 and content_density < 0.15
+
+        # Calculate keyword uniqueness (requires multiple articles, so return 0 for now)
+        # This will be calculated at the profile level
+        keyword_uniqueness = 1.0 if extraction_method == "trafilatura" else 0.0
+
+        return {
+            "extraction_method": extraction_method,
+            "content_density": round(content_density, 3),
+            "word_count": word_count,
+            "boilerplate_detected": boilerplate_detected,
+            "boilerplate_score": boilerplate_score,
+            "keyword_uniqueness": keyword_uniqueness,  # Will be calculated later at profile level
+        }
 
     def validate_article(
         self,
