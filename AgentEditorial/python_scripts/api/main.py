@@ -19,6 +19,8 @@ from python_scripts.api.routers import (
     health,
     images,
     sites,
+    sites_audit,
+    sites_topics,
     trend_pipeline,
 )
 from python_scripts.config.settings import settings
@@ -51,6 +53,8 @@ setup_rate_limiting(app)
 # Register routers
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(sites.router, prefix="/api/v1")
+app.include_router(sites_audit.router, prefix="/api/v1")
+app.include_router(sites_topics.router, prefix="/api/v1")
 app.include_router(competitors.router, prefix="/api/v1")
 app.include_router(discovery.router, prefix="/api/v1")
 app.include_router(trend_pipeline.router, prefix="/api/v1")
