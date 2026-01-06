@@ -147,24 +147,137 @@ domain_dict = {
 - Software development: 0/100
 - Cloud migration: 12/100
 
+**PREUVE DE POLLUTION ("Boilerplate Problem")**:
+```json
+// IT consulting, Security et Cloud ont EXACTEMENT les mêmes keywords !
+"it-consulting": {
+  "top_keywords": ["webnet", "chez", "php", "symfony", "expertise", "paris", "technique"]
+},
+"security-and-infrastructure-solutions": {
+  "top_keywords": ["de", "et", "pour", "webnet", "chez", "php", "symfony", "expertise", "paris"]
+},
+"cloud-migration": {
+  "top_keywords": ["de", "et", "pour", "webnet", "chez", "php", "symfony", "expertise", "paris"]
+}
+```
+
 **Impact**:
 - Domaines d'activité mal identifiés
 - Recommandations éditoriales potentiellement hors-sujet
 - Perte de confiance utilisateur
+- **Le scraper lit le Header/Footer/Navigation au lieu du contenu unique**
 
-**Cause probable**:
-1. **Peu d'articles scrapés**: Le site a peu de contenu
-2. **Algorithme de scoring trop strict**: Le calcul de confidence pénalise trop
-3. **Mismatch keywords**: Les articles ne matchent pas bien avec les labels de domaines
-4. **Échelle incorrecte**: Peut-être que l'échelle n'est pas 0-100 mais autre chose ?
+**Cause racine identifiée**: 🎯 **POLLUTION PAR BOILERPLATE**
+
+Le scraper extrait tout le HTML (navigation, header, footer, sidebar) au lieu du contenu principal. Les mots "webnet", "chez", "php", "symfony", "paris" sont probablement dans :
+- Le menu de navigation (liens partenaires)
+- Le footer (mentions légales, partenaires)
+- La sidebar (publicités, widgets)
+
+Résultat : Tous les domaines semblent identiques car ils voient les mêmes éléments répétés.
 
 **Solution recommandée**:
-1. Investiguer l'algorithme de calcul de `confidence` dans le code
-2. Ajuster les seuils selon le volume d'articles disponible
-3. Améliorer le matching keywords ↔ domaines d'activité
-4. Envisager un scoring relatif plutôt qu'absolu
 
-**Priorité**: 🔥 HAUTE - Fondation de l'analyse
+**1. Implémentation de Boilerplate Removal (CRITIQUE)**
+
+```python
+# Option A: Utiliser Trafilatura (Recommandé)
+from trafilatura import extract
+
+def scrape_clean_content(url: str) -> str:
+    """Extract only main content, removing navigation/header/footer."""
+    html = requests.get(url).text
+
+    # Trafilatura extrait automatiquement le contenu principal
+    clean_text = extract(
+        html,
+        include_comments=False,
+        include_tables=True,
+        no_fallback=False,
+    )
+
+    return clean_text or ""
+
+# Option B: Utiliser des sélecteurs CSS ciblés
+def scrape_with_selectors(url: str) -> str:
+    """Extract content using specific CSS selectors."""
+    soup = BeautifulSoup(html, 'html.parser')
+
+    # Chercher dans cet ordre de priorité
+    selectors = [
+        'article',           # Balise sémantique HTML5
+        'main',              # Contenu principal
+        '[role="main"]',     # Attribut ARIA
+        '.post-content',     # Class commune
+        '.article-body',
+        '#content',
+    ]
+
+    for selector in selectors:
+        content = soup.select_one(selector)
+        if content:
+            return content.get_text(strip=True)
+
+    # Fallback: tout le body en retirant header/footer/nav
+    for tag in soup.find_all(['header', 'footer', 'nav', 'aside']):
+        tag.decompose()
+
+    return soup.get_text(strip=True)
+```
+
+**2. Améliorer l'algorithme de confidence**
+
+```python
+# Après avoir nettoyé le contenu
+def calculate_domain_confidence(articles: List[Article], domain_label: str) -> float:
+    """Calculate confidence with quality checks."""
+    matching_articles = _count_articles_for_domain(articles, domain_label)
+    total_articles = len(articles)
+
+    if total_articles == 0:
+        return 0
+
+    base_confidence = (matching_articles / total_articles) * 100
+
+    # Pénaliser si keywords trop génériques (pollution détectée)
+    avg_keyword_uniqueness = _calculate_keyword_uniqueness(articles, domain_label)
+    if avg_keyword_uniqueness < 0.3:  # 30% de mots uniques minimum
+        base_confidence *= 0.5  # Réduire de moitié
+
+    return min(100, int(base_confidence))
+
+def _calculate_keyword_uniqueness(articles: List[Article], domain: str) -> float:
+    """Mesure le % de keywords uniques à ce domaine (vs partagés avec tous)."""
+    domain_keywords = set(get_top_keywords(articles, domain))
+    all_keywords = set(get_top_keywords(articles, "all"))
+
+    # Stop words à ignorer
+    stop_words = {"de", "et", "le", "la", "pour", "dans", "avec"}
+    domain_keywords -= stop_words
+
+    unique_ratio = len(domain_keywords - all_keywords) / len(domain_keywords) if domain_keywords else 0
+    return unique_ratio
+```
+
+**3. Ajouter une métrique de qualité des données**
+
+```json
+{
+  "id": "it-consulting",
+  "confidence": 45,  // Après nettoyage
+  "data_quality": {
+    "boilerplate_detected": false,
+    "content_density": 0.78,  // Ratio texte unique / texte total
+    "keyword_uniqueness": 0.65  // % de keywords non partagés
+  }
+}
+```
+
+**Priorité**: 🔥🔥 CRITIQUE - C'est la CAUSE RACINE de la faible confiance
+
+**Fichiers à modifier**:
+- `AgentEditorial/python_scripts/agents/scraping/` (scraper)
+- `AgentEditorial/python_scripts/api/routers/sites.py:981-988` (calcul confidence)
 
 ---
 
@@ -337,47 +450,579 @@ def get_differentiation_label(score: float) -> str:
 
 ---
 
-## 📊 Recommandations Globales
+## 🔧 Problèmes d'Architecture & UX
 
-### Court Terme (Cette Semaine)
+### 9. Champ "Issues" Vide Alors Que des Problèmes Existent
 
-1. **Fix critique "N/A"**: Corriger l'affichage des previews (1-2h)
-2. **Incohérence topics_count**: Unifier la logique (2-3h)
-3. **Enrichir analyses IA**: Ajouter opportunities et saturated_angles au prompt (3-4h)
+**Localisation**: `issues: []`
 
-### Moyen Terme (Ce Mois)
+**Problème**:
+```json
+{
+  "issues": [],  // ❌ Vide alors qu'il y a clairement des problèmes
+  "domains_stats": {
+    "avg_confidence": 4.8  // Clairement un problème !
+  }
+}
+```
 
-4. **Recalibrer scoring**: Ajuster seuils de potential et differentiation (1 jour)
-5. **Améliorer confiance domaines**: Investiguer et fixer l'algorithme (2-3 jours)
-6. **Fix freshness null**: Ajouter fallbacks et logging (1 jour)
+**Impact**:
+- Impossible de diagnostiquer automatiquement les problèmes
+- Pas de feedback actionnable pour l'utilisateur
+- Debugging difficile (pas de traçabilité des erreurs silencieuses)
 
-### Long Terme (Trimestre)
+**Solution recommandée**:
 
-7. **Améliorer diversité sources**: Augmenter le scraping concurrent (ongoing)
-8. **Validation end-to-end**: Tests automatisés sur la qualité de la réponse
-9. **Monitoring**: Dashboard pour tracker ces metrics au fil du temps
+**1. Structurer les issues avec severity et code**
+
+```python
+from enum import Enum
+from typing import List, Optional
+from pydantic import BaseModel
+
+class IssueSeverity(str, Enum):
+    CRITICAL = "critical"
+    WARNING = "warning"
+    INFO = "info"
+
+class IssueCode(str, Enum):
+    LOW_CONFIDENCE = "LOW_CONFIDENCE_SCORE"
+    BOILERPLATE_DETECTED = "BOILERPLATE_DETECTED"
+    MISSING_DATA = "MISSING_DATA"
+    LLM_PARSE_FAILED = "LLM_PARSE_FAILED"
+    NO_TRENDING_TOPICS = "NO_TRENDING_TOPICS"
+
+class AuditIssue(BaseModel):
+    code: IssueCode
+    severity: IssueSeverity
+    message: str
+    suggestion: str
+    context: Optional[dict] = None
+
+# Exemple d'utilisation
+def detect_issues(audit_data: dict) -> List[AuditIssue]:
+    """Detect and report issues in audit data."""
+    issues = []
+
+    # Détecter confiance faible
+    for domain in audit_data.get("domains", []):
+        if domain["confidence"] == 0:
+            issues.append(AuditIssue(
+                code=IssueCode.LOW_CONFIDENCE,
+                severity=IssueSeverity.CRITICAL,
+                message=f"Confiance nulle pour le domaine '{domain['label']}'",
+                suggestion="Vérifier le sélecteur CSS du scraping ou implémenter boilerplate removal",
+                context={
+                    "domain_id": domain["id"],
+                    "top_keywords": domain.get("metrics", {}).get("top_keywords", [])
+                }
+            ))
+
+    # Détecter pollution boilerplate (keywords identiques)
+    if _detect_duplicate_keywords(audit_data.get("domains", [])):
+        issues.append(AuditIssue(
+            code=IssueCode.BOILERPLATE_DETECTED,
+            severity=IssueSeverity.CRITICAL,
+            message="Pollution détectée : plusieurs domaines ont les mêmes keywords",
+            suggestion="Implémenter Trafilatura pour extraire uniquement le contenu principal",
+            context={"affected_domains": _get_domains_with_duplicate_keywords(audit_data)}
+        ))
+
+    # Détecter analyses LLM incomplètes
+    trend_analyses = audit_data.get("trend_analyses", {}).get("analyses", [])
+    for analysis in trend_analyses:
+        if analysis.get("opportunities") is None or analysis.get("saturated_angles") is None:
+            issues.append(AuditIssue(
+                code=IssueCode.LLM_PARSE_FAILED,
+                severity=IssueSeverity.WARNING,
+                message=f"Analyse LLM incomplète pour le topic '{analysis['topic_title']}'",
+                suggestion="Vérifier le prompt LLM et le parsing JSON de la réponse",
+                context={"topic_id": analysis["topic_id"]}
+            ))
+
+    return issues
+```
+
+**2. Exemple de réponse enrichie**
+
+```json
+{
+  "issues": [
+    {
+      "code": "BOILERPLATE_DETECTED",
+      "severity": "critical",
+      "message": "Pollution détectée : 3 domaines ont les mêmes keywords",
+      "suggestion": "Implémenter Trafilatura pour extraire uniquement le contenu principal",
+      "context": {
+        "affected_domains": ["it-consulting", "security-and-infrastructure", "cloud-migration"]
+      }
+    },
+    {
+      "code": "LOW_CONFIDENCE_SCORE",
+      "severity": "critical",
+      "domain_id": "it-consulting",
+      "message": "Confiance nulle pour le domaine 'IT consulting'",
+      "suggestion": "Vérifier le sélecteur CSS du scraping"
+    },
+    {
+      "code": "LLM_PARSE_FAILED",
+      "severity": "warning",
+      "message": "Analyse LLM incomplète pour 4 topics",
+      "suggestion": "Vérifier le prompt LLM et le parsing JSON"
+    }
+  ]
+}
+```
+
+**Priorité**: 🟡 MOYENNE - Améliore debugging et UX
 
 ---
 
-## 🔧 Fichiers à Investiguer
+### 10. Normalisation Incohérente des Scores
 
-Basé sur la structure du projet, voici où chercher:
+**Localisation**: Divers champs de scores
 
-1. **Construction de la réponse d'audit**:
-   - `AgentEditorial/python_scripts/api/routers/sites.py` (ligne ~3029, route `/audit`)
-   - Chercher la logique de construction des `*_stats` et `*_preview`
+**Problème**:
+```json
+{
+  "confidence": 12,        // Échelle inconnue (0-100 ?)
+  "similarity": 85,        // Échelle inconnue (0-100 ?)
+  "potential_score": 0.56, // 0-1
+  "differentiation_score": 0.8  // 0-1
+}
+```
 
-2. **Calcul de confidence des domaines**:
-   - `AgentEditorial/python_scripts/core/` (profiling ou domain extraction)
-   - Chercher `confidence` score calculation
+**Impact**:
+- Difficile à interpréter pour l'utilisateur
+- Pas de labels descriptifs ("Faible", "Moyen", "Élevé")
+- Impossible de comparer les scores entre eux
 
-3. **Analyses IA (opportunities/saturated)**:
-   - Chercher les prompts LLM pour trend analysis
-   - Module de parsing des réponses LLM
+**Solution recommandée**:
 
-4. **Scoring (potential, differentiation)**:
-   - `AgentEditorial/python_scripts/workflows/` (trend pipeline)
-   - Chercher les constantes de seuils
+**1. Standardiser tous les scores sur 0-1 avec labels**
+
+```python
+from enum import Enum
+
+class ScoreLevel(str, Enum):
+    VERY_LOW = "very_low"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    VERY_HIGH = "very_high"
+
+def normalize_score(value: float, min_val: float = 0, max_val: float = 100) -> float:
+    """Normalize score to 0-1 range."""
+    if value is None:
+        return 0.0
+    return min(1.0, max(0.0, (value - min_val) / (max_val - min_val)))
+
+def get_score_label(score: float) -> str:
+    """Get human-readable label for score."""
+    if score >= 0.8:
+        return "Très élevé"
+    elif score >= 0.6:
+        return "Élevé"
+    elif score >= 0.4:
+        return "Moyen"
+    elif score >= 0.2:
+        return "Faible"
+    else:
+        return "Très faible"
+
+# Exemple d'utilisation
+def format_domain_response(domain: dict) -> dict:
+    """Format domain with normalized scores."""
+    confidence_normalized = normalize_score(domain["confidence"], 0, 100)
+
+    return {
+        "id": domain["id"],
+        "label": domain["label"],
+        "confidence_score": confidence_normalized,  # 0-1
+        "confidence_level": get_score_label(confidence_normalized),  # "Faible"
+        # ... autres champs
+    }
+```
+
+**2. Exemple de réponse améliorée**
+
+```json
+{
+  "id": "it-consulting",
+  "label": "IT consulting",
+  "confidence_score": 0.6,
+  "confidence_level": "Élevé",
+  "metrics": {
+    "total_articles": 12,
+    "content_density": 0.78,
+    "keyword_uniqueness": 0.65
+  }
+}
+```
+
+**Priorité**: 🟢 BASSE - Amélioration UX importante mais pas critique
+
+---
+
+### 11. Payload JSON Trop Lourd (Optimisation)
+
+**Localisation**: Champ `raw_response`
+
+**Problème**:
+```json
+{
+  // ... toutes les stats calculées (profile_stats, domains_stats, etc.)
+  "raw_response": {
+    // ❌ DUPLICATION COMPLÈTE de toutes les données !
+    "profile": {...},
+    "domains": [...],
+    "trend_analyses": {...},
+    "editorial_opportunities": {...}
+  }
+}
+```
+
+**Impact**:
+- JSON très lourd (peut atteindre plusieurs MB)
+- Bande passante gaspillée
+- Parsing côté client plus lent
+- Coût serveur plus élevé
+
+**Solution recommandée**:
+
+**1. Rendre `raw_response` optionnel**
+
+```python
+@router.get("/{domain}/audit")
+async def get_site_audit(
+    domain: str,
+    include_raw: bool = Query(False, description="Include raw response for debugging"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get site audit with optional raw response."""
+    audit_data = await build_audit_response(db, domain)
+
+    # Par défaut, ne pas inclure raw_response
+    response = {
+        "domain": domain,
+        "timestamp": datetime.utcnow().isoformat(),
+        "profile": audit_data["profile"],
+        "domains": audit_data["domains"],
+        # ... autres champs essentiels
+    }
+
+    # Inclure raw_response uniquement si demandé
+    if include_raw:
+        response["raw_response"] = audit_data
+
+    return response
+```
+
+**2. Alternative : Endpoint séparé pour debug**
+
+```python
+@router.get("/{domain}/audit/debug")
+async def get_site_audit_debug(
+    domain: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get complete audit data with debug info (heavy payload)."""
+    return await build_complete_audit_with_debug(db, domain)
+```
+
+**3. Compression automatique**
+
+```python
+from fastapi.responses import ORJSONResponse
+from fastapi.middleware.gzip import GZipMiddleware
+
+# Ajouter dans main.py
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Utiliser ORJSONResponse pour serialization plus rapide
+@router.get("/{domain}/audit", response_class=ORJSONResponse)
+async def get_site_audit(...):
+    # ORJSONResponse est ~2-3x plus rapide que JSONResponse
+    return audit_data
+```
+
+**Gain estimé**:
+- Réduction payload : -50% à -70% (sans `raw_response`)
+- Temps de parsing côté client : -40%
+- Bande passante économisée : significative sur gros volumes
+
+**Priorité**: 🟢 BASSE - Optimisation performance, pas de bug fonctionnel
+
+---
+
+## 💡 Améliorations Futures (Non-Bloquantes)
+
+### 12. Intelligence Concurrentielle - "Competitor Gap Analysis"
+
+**Idée**: Enrichir la section `competitors` avec une analyse de ce que les concurrents ont que vous n'avez pas.
+
+**Exemple de structure**:
+```json
+{
+  "competitors_stats": {
+    "count": 5,
+    "avg_similarity": 83.8
+  },
+  "competitor_gap": {
+    "missing_keywords": [
+      "transformation digitale",
+      "cybersécurité industrielle",
+      "compliance RGPD"
+    ],
+    "missing_content_types": [
+      "livre blanc",
+      "cas client",
+      "webinaire"
+    ],
+    "recommended_actions": [
+      {
+        "priority": "high",
+        "action": "Créer des cas clients pour IT consulting",
+        "impact": "Améliorer la crédibilité et le SEO"
+      }
+    ]
+  }
+}
+```
+
+**Implémentation suggérée**:
+```python
+def analyze_competitor_gap(client_keywords: List[str], competitor_data: List[dict]) -> dict:
+    """Identify what competitors have that client doesn't."""
+    # Agréger tous les keywords des concurrents
+    all_competitor_keywords = set()
+    for comp in competitor_data:
+        all_competitor_keywords.update(comp.get("top_keywords", []))
+
+    # Identifier les gaps
+    client_keyword_set = set(client_keywords)
+    missing_keywords = all_competitor_keywords - client_keyword_set
+
+    # Filtrer les keywords pertinents (haute fréquence chez concurrents)
+    keyword_freq = Counter()
+    for comp in competitor_data:
+        for kw in comp.get("top_keywords", []):
+            keyword_freq[kw] += 1
+
+    # Garder seulement les keywords présents chez 3+ concurrents
+    high_value_missing = [
+        kw for kw in missing_keywords
+        if keyword_freq[kw] >= 3
+    ][:10]  # Top 10
+
+    return {
+        "missing_keywords": high_value_missing,
+        "gap_severity": "high" if len(high_value_missing) > 5 else "medium"
+    }
+```
+
+**Priorité**: 🟢 TRÈS BASSE - Feature nouvelle, pas un fix
+
+---
+
+## 📊 Recommandations Globales
+
+### 🔥 PRIORITÉ ABSOLUE (Urgent - Impact Majeur)
+
+**1. Implémenter Boilerplate Removal (CRITIQUE)**
+- **Problème**: Cause racine de la confiance faible (4.8%)
+- **Preuve**: Keywords identiques pour 3 domaines différents
+- **Impact**: Résoudra les problèmes #4, #5, #6, #9 d'un coup
+- **Effort**: 1-2 jours
+- **ROI**: TRÈS ÉLEVÉ (fix 50% des problèmes en une seule action)
+
+**Actions concrètes**:
+```bash
+# 1. Installer Trafilatura
+pip install trafilatura
+
+# 2. Modifier le scraper (AgentEditorial/python_scripts/agents/scraping/)
+# 3. Re-scraper innosys.fr avec le nouveau scraper
+# 4. Vérifier que les keywords sont maintenant uniques par domaine
+```
+
+**Résultat attendu**:
+- `confidence`: 4.8 → 45-65%
+- `top_keywords` uniques par domaine
+- `issues` détectant automatiquement les pollutions
+
+---
+
+### Court Terme (Cette Semaine)
+
+2. **Enrichir analyses IA**: Parser strictement `opportunities` et `saturated_angles` (3-4h)
+3. **Structurer les issues**: Implémenter détection automatique des problèmes (2-3h)
+4. **Fix incohérence topics_count**: Unifier la logique (2h)
+
+### Moyen Terme (Ce Mois)
+
+5. **Recalibrer scoring**: Ajuster seuils de `potential` et `differentiation` (1 jour)
+6. **Normaliser les scores**: Ajouter labels "Faible"/"Moyen"/"Élevé" (1 jour)
+7. **Fix freshness null**: Ajouter fallbacks sur `created_at` (1 jour)
+8. **Optimiser payload**: Rendre `raw_response` optionnel (1 jour)
+
+### Long Terme (Trimestre)
+
+9. **Competitor Gap Analysis**: Analyser ce que les concurrents ont en plus (2-3 jours)
+10. **Améliorer diversité sources**: Augmenter le scraping concurrent (ongoing)
+11. **Validation end-to-end**: Tests automatisés sur la qualité de la réponse
+12. **Monitoring**: Dashboard pour tracker ces metrics au fil du temps
+
+---
+
+## 🎯 Résumé Visuel : Avant → Après
+
+### Problème #4 : Confiance des Domaines
+
+**AVANT (État Actuel - Problématique)**:
+```json
+{
+  "id": "it-consulting",
+  "confidence": 0,  // ❌ Nulle
+  "metrics": {
+    "top_keywords": ["le", "de", "webnet", "php", "symfony"]  // ❌ Mots vides + bruit
+  }
+}
+```
+
+**APRÈS (Avec Boilerplate Removal + Normalisation)**:
+```json
+{
+  "id": "it-consulting",
+  "confidence_score": 0.62,  // ✅ Normalisé 0-1
+  "confidence_level": "Élevé",  // ✅ Label clair
+  "data_quality": {
+    "boilerplate_detected": false,  // ✅ Diagnostic automatique
+    "content_density": 0.78,
+    "keyword_uniqueness": 0.65
+  },
+  "metrics": {
+    "total_articles": 12,
+    "top_keywords": [
+      "architecture réseau",     // ✅ Mots nettoyés et pertinents
+      "audit si",
+      "bmc helix",
+      "infrastructure it",
+      "consulting technique"
+    ]
+  }
+}
+```
+
+### Problème #2 : Analyses LLM
+
+**AVANT**:
+```json
+{
+  "topic_id": "webnet_chez_php-1",
+  "synthesis": "La tendance 'webnet_chez_php'...",
+  "opportunities": null,  // ❌
+  "saturated_angles": null  // ❌
+}
+```
+
+**APRÈS**:
+```json
+{
+  "topic_id": "webnet_chez_php-1",
+  "synthesis": "La tendance 'webnet_chez_php'...",
+  "opportunities": [  // ✅
+    "Comparaison Symfony 7 vs Laravel",
+    "Guide migration PHP 8.3",
+    "Performance optimization PHP-FPM"
+  ],
+  "saturated_angles": [  // ✅
+    "Tutoriel basique Symfony",
+    "Installation PHP step-by-step"
+  ]
+}
+```
+
+### Problème #9 : Issues
+
+**AVANT**:
+```json
+{
+  "issues": []  // ❌ Vide alors qu'il y a des problèmes
+}
+```
+
+**APRÈS**:
+```json
+{
+  "issues": [  // ✅
+    {
+      "code": "BOILERPLATE_DETECTED",
+      "severity": "critical",
+      "message": "3 domaines partagent les mêmes keywords",
+      "suggestion": "Implémenter Trafilatura",
+      "context": {
+        "affected_domains": ["it-consulting", "security", "cloud"]
+      }
+    }
+  ]
+}
+```
+
+---
+
+## 🔧 Fichiers à Investiguer & Modifier
+
+### Priorité CRITIQUE (Boilerplate Removal)
+
+**1. Scraper Principal**
+- `AgentEditorial/python_scripts/agents/scraping/scraper.py`
+- Ajouter Trafilatura pour extraction du contenu principal
+- Remplacer BeautifulSoup par extraction intelligente
+
+**2. Calcul de Confidence**
+- `AgentEditorial/python_scripts/api/routers/sites.py:981-988`
+- Fonction `_count_articles_for_domain()`
+- Ajouter détection de pollution boilerplate
+
+**3. Détection d'Issues**
+- `AgentEditorial/python_scripts/api/routers/sites.py` (après construction audit)
+- Créer fonction `detect_audit_issues(audit_data)`
+- Ajouter schema Pydantic pour `AuditIssue`
+
+### Priorité HAUTE (Analyses LLM)
+
+**4. Parsing LLM**
+- `AgentEditorial/python_scripts/agents/trend_pipeline/llm_enrichment/llm_enricher.py:112`
+- Fonction `_parse_json_response()`
+- Valider strictement présence de `opportunities` et `saturated_angles`
+
+**5. Prompts LLM**
+- `AgentEditorial/python_scripts/agents/trend_pipeline/llm_enrichment/prompts.py`
+- Prompt déjà bon, mais peut-être ajouter exemples concrets
+
+**6. Sauvegarde en DB**
+- `AgentEditorial/python_scripts/agents/trend_pipeline/agent.py:755-762`
+- Vérifier que `synthesis.get("opportunities")` ne retourne pas None
+
+### Priorité MOYENNE (Normalisation & Scoring)
+
+**7. Normalisation des Scores**
+- `AgentEditorial/python_scripts/api/routers/sites.py`
+- Créer fonctions `normalize_score()` et `get_score_label()`
+- Appliquer sur confidence, similarity, potential, differentiation
+
+**8. Calibration des Seuils**
+- `AgentEditorial/python_scripts/agents/trend_pipeline/` (scoring)
+- Chercher constantes `HIGH_POTENTIAL_THRESHOLD`, `HIGH_DIFFERENTIATION_THRESHOLD`
+- Ajuster selon distribution réelle des scores
+
+### Priorité BASSE (Optimisation)
+
+**9. Optimisation Payload**
+- `AgentEditorial/python_scripts/api/routers/sites.py` (route `/audit`)
+- Ajouter paramètre `include_raw: bool = Query(False)`
+- Middleware GZip si pas déjà présent
 
 ---
 
