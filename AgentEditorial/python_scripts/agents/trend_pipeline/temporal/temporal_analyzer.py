@@ -152,6 +152,7 @@ class TemporalAnalyzer:
             "drift_detected": drift_detected,
             "drift_distance": drift_distance,
             "potential_score": potential_score,
+            "potential_level": self._classify_potential(potential_score),  # Classification label
         }
     
     def analyze_all_topics(
@@ -294,6 +295,7 @@ class TemporalAnalyzer:
             "drift_detected": False,
             "drift_distance": None,
             "potential_score": 0,
+            "potential_level": "low",  # Empty metrics = low potential
         }
     
     def _classify_velocity(self, velocity: float) -> str:
@@ -319,7 +321,28 @@ class TemporalAnalyzer:
         elif count <= self.config.diversity_niche_threshold:
             return "niche"
         return "moderate"
-    
+
+    def _classify_potential(self, score: float) -> str:
+        """
+        Classify editorial potential level.
+
+        Uses calibrated thresholds based on real data distribution.
+
+        Args:
+            score: Potential score (0-1)
+
+        Returns:
+            Classification label: "very_high", "high", "medium", or "low"
+        """
+        if score >= self.config.potential_very_high_threshold:
+            return "very_high"  # Très prometteur
+        elif score >= self.config.potential_high_threshold:
+            return "high"  # Prometteur
+        elif score >= self.config.potential_medium_threshold:
+            return "medium"  # Modéré
+        else:
+            return "low"  # Faible potentiel
+
     def _calculate_cohesion(
         self,
         topic_id: int,
